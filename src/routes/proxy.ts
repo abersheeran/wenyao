@@ -3,6 +3,7 @@ import { stream } from 'hono/streaming'
 import { loadBalancer } from '../services/load-balancer.js'
 import { statsTracker } from '../services/stats-tracker.js'
 import type { ChatCompletionRequest } from '../types/backend.js'
+import type { ApiKey } from '../types/apikey.js'
 
 const proxyApp = new Hono()
 
@@ -20,6 +21,18 @@ proxyApp.post('/chat/completions', async (c) => {
           code: 'model_required'
         }
       }, 400)
+    }
+
+    // Check API key permissions for the requested model
+    const apiKey = c.get('apiKey') as ApiKey
+    if (!apiKey.models.includes(requestBody.model)) {
+      return c.json({
+        error: {
+          message: `API key does not have permission to access model: ${requestBody.model}`,
+          type: 'permission_denied',
+          code: 'model_not_allowed'
+        }
+      }, 403)
     }
 
     // Get backend-id from header if specified (for forced backend selection)

@@ -11,6 +11,11 @@ import {
   modelParamSchema,
   modelAndBackendParamSchema
 } from '../schemas/backend.js'
+import {
+  createApiKeySchema,
+  updateApiKeySchema,
+  apiKeyParamSchema
+} from '../schemas/apikey.js'
 
 const admin = new Hono()
 
@@ -555,5 +560,147 @@ admin.get('/instances/:instanceId/stats', async (c) => {
     return c.json({ error: 'Failed to fetch instance stats' }, 500)
   }
 })
+
+// ===== API Key Management Endpoints =====
+
+// GET /admin/apikeys - Get all API keys
+admin.get('/apikeys', async (c) => {
+  if (!mongoDBService.isConnected()) {
+    return c.json({ error: 'MongoDB not connected' }, 503)
+  }
+
+  try {
+    const collection = mongoDBService.getApiKeysCollection()
+    const apiKeys = await collection.find({}).toArray()
+    return c.json({ apiKeys })
+  } catch (error) {
+    console.error('Error fetching API keys:', error)
+    return c.json({ error: 'Failed to fetch API keys' }, 500)
+  }
+})
+
+// GET /admin/apikeys/:key - Get a specific API key
+admin.get(
+  '/apikeys/:key',
+  zValidator('param', apiKeyParamSchema),
+  async (c) => {
+    if (!mongoDBService.isConnected()) {
+      return c.json({ error: 'MongoDB not connected' }, 503)
+    }
+
+    const { key } = c.req.valid('param')
+
+    try {
+      const collection = mongoDBService.getApiKeysCollection()
+      const apiKey = await collection.findOne({ key })
+
+      if (!apiKey) {
+        return c.json({ error: 'API key not found' }, 404)
+      }
+
+      return c.json({ apiKey })
+    } catch (error) {
+      console.error('Error fetching API key:', error)
+      return c.json({ error: 'Failed to fetch API key' }, 500)
+    }
+  }
+)
+
+// POST /admin/apikeys - Create a new API key
+admin.post(
+  '/apikeys',
+  zValidator('json', createApiKeySchema),
+  async (c) => {
+    if (!mongoDBService.isConnected()) {
+      return c.json({ error: 'MongoDB not connected' }, 503)
+    }
+
+    const body = c.req.valid('json')
+
+    try {
+      const collection = mongoDBService.getApiKeysCollection()
+
+      // Check if key already exists
+      const existing = await collection.findOne({ key: body.key })
+      if (existing) {
+        return c.json({ error: 'API key already exists' }, 409)
+      }
+
+      const apiKey = {
+        key: body.key,
+        description: body.description,
+        models: body.models,
+        createdAt: new Date()
+      }
+
+      await collection.insertOne(apiKey)
+      return c.json({ apiKey }, 201)
+    } catch (error) {
+      console.error('Error creating API key:', error)
+      return c.json({ error: 'Failed to create API key' }, 500)
+    }
+  }
+)
+
+// PUT /admin/apikeys/:key - Update an API key
+admin.put(
+  '/apikeys/:key',
+  zValidator('param', apiKeyParamSchema),
+  zValidator('json', updateApiKeySchema),
+  async (c) => {
+    if (!mongoDBService.isConnected()) {
+      return c.json({ error: 'MongoDB not connected' }, 503)
+    }
+
+    const { key } = c.req.valid('param')
+    const updates = c.req.valid('json')
+
+    try {
+      const collection = mongoDBService.getApiKeysCollection()
+
+      const result = await collection.findOneAndUpdate(
+        { key },
+        { $set: updates },
+        { returnDocument: 'after' }
+      )
+
+      if (!result) {
+        return c.json({ error: 'API key not found' }, 404)
+      }
+
+      return c.json({ apiKey: result })
+    } catch (error) {
+      console.error('Error updating API key:', error)
+      return c.json({ error: 'Failed to update API key' }, 500)
+    }
+  }
+)
+
+// DELETE /admin/apikeys/:key - Delete an API key
+admin.delete(
+  '/apikeys/:key',
+  zValidator('param', apiKeyParamSchema),
+  async (c) => {
+    if (!mongoDBService.isConnected()) {
+      return c.json({ error: 'MongoDB not connected' }, 503)
+    }
+
+    const { key } = c.req.valid('param')
+
+    try {
+      const collection = mongoDBService.getApiKeysCollection()
+      const result = await collection.deleteOne({ key })
+
+      if (result.deletedCount === 0) {
+        return c.json({ error: 'API key not found' }, 404)
+      }
+
+      return c.json({ message: 'API key deleted successfully' })
+    } catch (error) {
+      console.error('Error deleting API key:', error)
+      return c.json({ error: 'Failed to delete API key' }, 500)
+    }
+  }
+)
 
 export default admin

@@ -4,7 +4,8 @@ import admin from '../routes/admin.js'
 import proxy from '../routes/proxy.js'
 import { configManager } from '../services/config-manager.js'
 import { statsTracker } from '../services/stats-tracker.js'
-import { adminAuth } from '../middleware/auth.js'
+import { adminAuth, proxyAuth } from '../middleware/auth.js'
+import { mongoDBService } from '../services/mongodb.js'
 import type { ModelConfig, BackendConfig } from '../types/backend.js'
 
 // 测试用的 API Key
@@ -266,15 +267,51 @@ describe('Admin API - Statistics', () => {
 
 describe('Proxy API - Load Balancing', () => {
   const app = new Hono()
+  app.use('/v1/*', proxyAuth)
   app.route('/v1', proxy)
+
+  beforeAll(async () => {
+    // Connect to MongoDB for API key auth tests
+    if (process.env.MONGODB_URL) {
+      try {
+        await mongoDBService.connect()
+      } catch (error) {
+        console.error('Failed to connect to MongoDB for tests:', error)
+      }
+    }
+  })
+
+  afterAll(async () => {
+    if (mongoDBService.isConnected()) {
+      await mongoDBService.disconnect()
+    }
+  })
 
   beforeEach(async () => {
     await clearAllModels()
     statsTracker.resetAllStats()
+    // Create a test API key with access to gpt-4
+    if (mongoDBService.isConnected()) {
+      const collection = mongoDBService.getApiKeysCollection()
+      await collection.deleteMany({})
+      await collection.insertOne({
+        key: 'test-load-balancing-key',
+        description: 'Test Load Balancing Key',
+        models: ['gpt-4'],
+        createdAt: new Date()
+      })
+    }
   })
 
   it('returns 400 when model not configured', async () => {
-    const res = await app.fetch(req('/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }) }))
+    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-load-balancing-key'
+      },
+      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
+    }))
     const data = await res.json()
     expect(res.status).toBe(400)
     expect(data.error.message).toContain('not found')
@@ -282,7 +319,14 @@ describe('Proxy API - Load Balancing', () => {
 
   it('returns 503 when no enabled backends', async () => {
     await configManager.addModelConfig({ model: 'gpt-4', backends: [ { id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: false } ], loadBalancingStrategy: 'weighted' })
-    const res = await app.fetch(req('/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }) }))
+    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-load-balancing-key'
+      },
+      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
+    }))
     const data = await res.json()
     expect(res.status).toBe(503)
     expect(data.error.message).toContain('No enabled backends')
@@ -290,7 +334,15 @@ describe('Proxy API - Load Balancing', () => {
 
   it('returns 400 when X-Backend-ID not found', async () => {
     await configManager.addModelConfig({ model: 'gpt-4', backends: [ { id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: true } ], loadBalancingStrategy: 'weighted' })
-    const res = await app.fetch(req('/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Backend-ID': 'nope' }, body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }) }))
+    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-load-balancing-key',
+        'X-Backend-ID': 'nope'
+      },
+      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
+    }))
     const data = await res.json()
     expect(res.status).toBe(400)
     expect(data.error.message).toContain('not found')
@@ -298,10 +350,304 @@ describe('Proxy API - Load Balancing', () => {
 
   it('returns 400 when X-Backend-ID disabled', async () => {
     await configManager.addModelConfig({ model: 'gpt-4', backends: [ { id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: false }, { id: 'b2', url: 'https://b.test', apiKey: 'k2', weight: 1, enabled: true } ], loadBalancingStrategy: 'weighted' })
-    const res = await app.fetch(req('/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Backend-ID': 'b1' }, body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }) }))
+    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-load-balancing-key',
+        'X-Backend-ID': 'b1'
+      },
+      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
+    }))
     const data = await res.json()
     expect(res.status).toBe(400)
     expect(data.error.message).toContain('disabled')
+  })
+})
+
+describe('Admin API - API Key Management', () => {
+  const app = new Hono()
+  app.use('/admin/*', adminAuth)
+  app.route('/admin', admin)
+
+  beforeAll(async () => {
+    process.env.ADMIN_APIKEYS = TEST_API_KEY
+    // Connect to MongoDB for API key tests
+    if (process.env.MONGODB_URL) {
+      try {
+        await mongoDBService.connect()
+      } catch (error) {
+        console.error('Failed to connect to MongoDB for tests:', error)
+      }
+    }
+  })
+
+  afterAll(async () => {
+    delete process.env.ADMIN_APIKEYS
+    if (mongoDBService.isConnected()) {
+      await mongoDBService.disconnect()
+    }
+  })
+
+  beforeEach(async () => {
+    // Clear all API keys before each test
+    if (mongoDBService.isConnected()) {
+      const collection = mongoDBService.getApiKeysCollection()
+      await collection.deleteMany({})
+    }
+  })
+
+  it('GET /admin/apikeys returns 503 when MongoDB not connected', async () => {
+    if (mongoDBService.isConnected()) {
+      await mongoDBService.disconnect()
+    }
+    const res = await app.fetch(req('/admin/apikeys'))
+    const data = await res.json()
+    expect(res.status).toBe(503)
+    expect(data.error).toContain('MongoDB not connected')
+  })
+
+  it('POST /admin/apikeys creates a new API key', async () => {
+    if (!mongoDBService.isConnected()) {
+      await mongoDBService.connect()
+    }
+    const body = {
+      key: 'test-key-123',
+      description: 'Test API Key',
+      models: ['gpt-4', 'claude-3-sonnet']
+    }
+    const res = await app.fetch(req('/admin/apikeys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }))
+    const data = await res.json()
+    expect(res.status).toBe(201)
+    expect(data.apiKey.key).toBe('test-key-123')
+    expect(data.apiKey.description).toBe('Test API Key')
+    expect(data.apiKey.models).toEqual(['gpt-4', 'claude-3-sonnet'])
+    expect(data.apiKey.createdAt).toBeDefined()
+  })
+
+  it('POST /admin/apikeys returns 409 when key already exists', async () => {
+    if (!mongoDBService.isConnected()) {
+      await mongoDBService.connect()
+    }
+    const body = {
+      key: 'test-key-123',
+      description: 'Test API Key',
+      models: ['gpt-4']
+    }
+    // Create first time
+    await app.fetch(req('/admin/apikeys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }))
+    // Try to create again
+    const res = await app.fetch(req('/admin/apikeys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }))
+    const data = await res.json()
+    expect(res.status).toBe(409)
+    expect(data.error).toContain('already exists')
+  })
+
+  it('GET /admin/apikeys/:key returns a specific API key', async () => {
+    if (!mongoDBService.isConnected()) {
+      await mongoDBService.connect()
+    }
+    // Create API key first
+    await app.fetch(req('/admin/apikeys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        key: 'test-key-123',
+        description: 'Test API Key',
+        models: ['gpt-4']
+      })
+    }))
+    // Get the API key
+    const res = await app.fetch(req('/admin/apikeys/test-key-123'))
+    const data = await res.json()
+    expect(res.status).toBe(200)
+    expect(data.apiKey.key).toBe('test-key-123')
+  })
+
+  it('PUT /admin/apikeys/:key updates an API key', async () => {
+    if (!mongoDBService.isConnected()) {
+      await mongoDBService.connect()
+    }
+    // Create API key first
+    await app.fetch(req('/admin/apikeys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        key: 'test-key-123',
+        description: 'Test API Key',
+        models: ['gpt-4']
+      })
+    }))
+    // Update the API key
+    const res = await app.fetch(req('/admin/apikeys/test-key-123', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description: 'Updated Description',
+        models: ['gpt-4', 'claude-3']
+      })
+    }))
+    const data = await res.json()
+    expect(res.status).toBe(200)
+    expect(data.apiKey.description).toBe('Updated Description')
+    expect(data.apiKey.models).toEqual(['gpt-4', 'claude-3'])
+  })
+
+  it('DELETE /admin/apikeys/:key deletes an API key', async () => {
+    if (!mongoDBService.isConnected()) {
+      await mongoDBService.connect()
+    }
+    // Create API key first
+    await app.fetch(req('/admin/apikeys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        key: 'test-key-123',
+        description: 'Test API Key',
+        models: ['gpt-4']
+      })
+    }))
+    // Delete the API key
+    const res = await app.fetch(req('/admin/apikeys/test-key-123', {
+      method: 'DELETE'
+    }))
+    const data = await res.json()
+    expect(res.status).toBe(200)
+    expect(data.message).toContain('deleted successfully')
+  })
+})
+
+describe('Proxy API - API Key Authentication', () => {
+  const app = new Hono()
+  app.use('/v1/*', proxyAuth)
+  app.route('/v1', proxy)
+
+  beforeAll(async () => {
+    // Connect to MongoDB for API key auth tests
+    if (process.env.MONGODB_URL) {
+      try {
+        await mongoDBService.connect()
+      } catch (error) {
+        console.error('Failed to connect to MongoDB for tests:', error)
+      }
+    }
+  })
+
+  afterAll(async () => {
+    if (mongoDBService.isConnected()) {
+      await mongoDBService.disconnect()
+    }
+  })
+
+  beforeEach(async () => {
+    await clearAllModels()
+    statsTracker.resetAllStats()
+    // Clear all API keys
+    if (mongoDBService.isConnected()) {
+      const collection = mongoDBService.getApiKeysCollection()
+      await collection.deleteMany({})
+    }
+  })
+
+  it('returns 401 when no Authorization header', async () => {
+    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
+    }))
+    const data = await res.json()
+    expect(res.status).toBe(401)
+    expect(data.error).toBe('Unauthorized')
+  })
+
+  it('returns 401 when invalid API key', async () => {
+    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer invalid-key'
+      },
+      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
+    }))
+    const data = await res.json()
+    expect(res.status).toBe(401)
+    expect(data.error).toBe('Unauthorized')
+  })
+
+  it('returns 403 when API key does not have permission for model', async () => {
+    if (!mongoDBService.isConnected()) {
+      await mongoDBService.connect()
+    }
+    // Create API key with limited model access
+    const collection = mongoDBService.getApiKeysCollection()
+    await collection.insertOne({
+      key: 'test-proxy-key',
+      description: 'Test Proxy Key',
+      models: ['claude-3-sonnet'],
+      createdAt: new Date()
+    })
+    // Configure model
+    await configManager.addModelConfig({
+      model: 'gpt-4',
+      backends: [{ id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: true }],
+      loadBalancingStrategy: 'weighted'
+    })
+    // Try to access gpt-4 with API key that only has access to claude-3-sonnet
+    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-proxy-key'
+      },
+      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
+    }))
+    const data = await res.json()
+    expect(res.status).toBe(403)
+    expect(data.error.message).toContain('does not have permission')
+  })
+
+  it('allows access with valid API key and correct model permission', async () => {
+    if (!mongoDBService.isConnected()) {
+      await mongoDBService.connect()
+    }
+    // Create API key with gpt-4 access
+    const collection = mongoDBService.getApiKeysCollection()
+    await collection.insertOne({
+      key: 'test-proxy-key',
+      description: 'Test Proxy Key',
+      models: ['gpt-4'],
+      createdAt: new Date()
+    })
+    // Configure model
+    await configManager.addModelConfig({
+      model: 'gpt-4',
+      backends: [{ id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: true }],
+      loadBalancingStrategy: 'weighted'
+    })
+    // Try to access gpt-4 (should pass auth but fail on backend call)
+    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-proxy-key'
+      },
+      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
+    }))
+    // Should not be 401 or 403 (auth passed)
+    expect(res.status).not.toBe(401)
+    expect(res.status).not.toBe(403)
   })
 })
 

@@ -20,7 +20,7 @@ import {
 } from "../components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { useAdminApi, type BackendConfig, type ModelConfig, type LoadBalancingStrategy, type StatsDataPoint } from "~/apis";
+import { useAdminApi, type BackendConfig, type ModelConfig, type LoadBalancingStrategy, type StatsDataPoint, type ApiKey } from "~/apis";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "../components/ui/chart";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
@@ -71,6 +71,7 @@ export default function Admin() {
           <Tabs value={tab} onValueChange={(v) => setTab(v)}>
             <TabsList>
               <TabsTrigger value="backends">Backends</TabsTrigger>
+              <TabsTrigger value="apikeys">API Keys</TabsTrigger>
               <TabsTrigger value="stats">Stats</TabsTrigger>
               <TabsTrigger value="metrics">Metrics</TabsTrigger>
             </TabsList>
@@ -112,6 +113,7 @@ export default function Admin() {
       </Dialog>
 
       {tab === "backends" && <BackendsPanel api={api} />}
+      {tab === "apikeys" && <ApiKeysPanel api={api} />}
       {tab === "stats" && <StatsPanel api={api} />}
       {tab === "metrics" && <MetricsPanel api={api} />}
     </main>
@@ -646,6 +648,367 @@ function EditBackendDialog({ open, onOpenChange, model, backend, onSaved }: {
               Cancel
             </Button>
             <Button type="submit" disabled={submitState.loading}>
+              {submitState.loading ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ApiKeysPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
+  const [apiKeys, setApiKeys] = React.useState<ApiKey[]>([]);
+  const [models, setModels] = React.useState<string[]>([]);
+  const [addApiKeyOpen, setAddApiKeyOpen] = React.useState(false);
+  const [editingApiKey, setEditingApiKey] = React.useState<ApiKey | null>(null);
+
+  const [listState, load] = useAsyncFn(async () => {
+    try {
+      const [keysData, modelsData] = await Promise.all([
+        api.listApiKeys(),
+        api.listModels()
+      ]);
+      setApiKeys(keysData);
+      setModels(modelsData.map(m => m.model));
+      return keysData;
+    } catch (error: any) {
+      if (error?.message?.includes('Unauthorized') || error?.message?.includes('401')) {
+        localStorage.removeItem('adminApiKey');
+        window.location.reload();
+      }
+      throw error;
+    }
+  }, [api]);
+
+  const [deleteState, deleteApiKey] = useAsyncFn(
+    async (key: string) => {
+      await api.deleteApiKey(key);
+      await load();
+    },
+    [api, load]
+  );
+
+  React.useEffect(() => {
+    load();
+  }, []);
+
+  const formatDate = (date: string | Date | undefined) => {
+    if (!date) return 'Never';
+    return new Date(date).toLocaleString('zh-CN');
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex items-center justify-between">
+        <CardTitle>API Keys</CardTitle>
+        <Button onClick={() => setAddApiKeyOpen(true)}>Add API Key</Button>
+      </CardHeader>
+      <CardContent>
+        {(listState.error || deleteState.error) && (
+          <p className="text-sm text-red-600 mb-2">
+            {(listState.error || deleteState.error)?.message}
+          </p>
+        )}
+        {listState.loading ? (
+          <p className="text-sm text-gray-500">Loading...</p>
+        ) : apiKeys.length === 0 ? (
+          <p className="text-sm text-gray-500">No API keys configured.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Key</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Models</TableHead>
+                <TableHead>Created At</TableHead>
+                <TableHead>Last Used</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {apiKeys.map((apiKey) => (
+                <TableRow key={apiKey.key}>
+                  <TableCell className="font-mono text-xs">
+                    {apiKey.key.substring(0, 20)}...
+                  </TableCell>
+                  <TableCell>{apiKey.description}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {apiKey.models.map((model) => (
+                        <span
+                          key={model}
+                          className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded text-xs"
+                        >
+                          {model}
+                        </span>
+                      ))}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {formatDate(apiKey.createdAt)}
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {formatDate(apiKey.lastUsedAt)}
+                  </TableCell>
+                  <TableCell className="space-x-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setEditingApiKey(apiKey)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => {
+                        if (confirm(`Delete API key ${apiKey.key}?`)) {
+                          deleteApiKey(apiKey.key);
+                        }
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+
+      <AddApiKeyDialog
+        open={addApiKeyOpen}
+        onOpenChange={setAddApiKeyOpen}
+        availableModels={models}
+        onAdded={load}
+      />
+      <EditApiKeyDialog
+        open={!!editingApiKey}
+        apiKey={editingApiKey}
+        availableModels={models}
+        onOpenChange={(v) => !v && setEditingApiKey(null)}
+        onSaved={() => {
+          setEditingApiKey(null);
+          load();
+        }}
+      />
+    </Card>
+  );
+}
+
+function AddApiKeyDialog({
+  open,
+  onOpenChange,
+  availableModels,
+  onAdded
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  availableModels: string[];
+  onAdded: () => void;
+}) {
+  const api = useAdminApi();
+  const [form, setForm] = React.useState<{ key: string; description: string; models: string[] }>({
+    key: "",
+    description: "",
+    models: []
+  });
+
+  const generateRandomKey = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const length = 32;
+    let result = 'sk-';
+    for (let i = 0; i < length; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setForm({ ...form, key: result });
+  };
+
+  const toggleModel = (model: string) => {
+    const newModels = form.models.includes(model)
+      ? form.models.filter(m => m !== model)
+      : [...form.models, model];
+    setForm({ ...form, models: newModels });
+  };
+
+  const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
+    e.preventDefault();
+    await api.createApiKey(form);
+    setForm({ key: "", description: "", models: [] });
+    onOpenChange(false);
+    onAdded();
+  }, [api, form, onOpenChange, onAdded]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Add API Key</DialogTitle>
+        </DialogHeader>
+        <form className="space-y-3" onSubmit={submit}>
+          {submitState.error && <p className="text-sm text-red-600">{submitState.error.message}</p>}
+          <div>
+            <label className="block text-sm mb-1">API Key</label>
+            <div className="flex gap-2">
+              <Input
+                required
+                value={form.key}
+                onChange={(e) => setForm({ ...form, key: e.target.value })}
+                placeholder="sk-..."
+                className="font-mono text-sm"
+              />
+              <Button type="button" variant="outline" onClick={generateRandomKey}>
+                Generate
+              </Button>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Generate a random key or enter your own
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Description</label>
+            <Input
+              required
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              placeholder="e.g., Production API Key"
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-2">Allowed Models</label>
+            {availableModels.length === 0 ? (
+              <p className="text-sm text-gray-500">No models available. Please add models first.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {availableModels.map((model) => (
+                  <button
+                    key={model}
+                    type="button"
+                    onClick={() => toggleModel(model)}
+                    className={`px-3 py-1.5 rounded border text-sm transition-colors ${
+                      form.models.includes(model)
+                        ? 'bg-blue-100 border-blue-300 text-blue-800'
+                        : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    {model}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-gray-500 mt-2">
+              Select at least one model that this API key can access
+            </p>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitState.loading || form.models.length === 0}>
+              {submitState.loading ? "Creating..." : "Create"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditApiKeyDialog({
+  open,
+  onOpenChange,
+  apiKey,
+  availableModels,
+  onSaved
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  apiKey: ApiKey | null;
+  availableModels: string[];
+  onSaved: () => void;
+}) {
+  const api = useAdminApi();
+  const [form, setForm] = React.useState<{ description: string; models: string[] }>({
+    description: "",
+    models: []
+  });
+
+  React.useEffect(() => {
+    if (apiKey) {
+      setForm({
+        description: apiKey.description,
+        models: apiKey.models
+      });
+    }
+  }, [apiKey]);
+
+  const toggleModel = (model: string) => {
+    const newModels = form.models.includes(model)
+      ? form.models.filter(m => m !== model)
+      : [...form.models, model];
+    setForm({ ...form, models: newModels });
+  };
+
+  const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!apiKey) return;
+    await api.updateApiKey(apiKey.key, form);
+    onSaved();
+  }, [api, apiKey, form, onSaved]);
+
+  if (!apiKey) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit API Key</DialogTitle>
+        </DialogHeader>
+        <form className="space-y-3" onSubmit={submit}>
+          {submitState.error && <p className="text-sm text-red-600">{submitState.error.message}</p>}
+          <div>
+            <label className="block text-sm mb-1">API Key</label>
+            <Input value={apiKey.key} disabled readOnly className="font-mono text-sm" />
+            <p className="text-xs text-gray-500 mt-1">API key cannot be changed</p>
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Description</label>
+            <Input
+              required
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-2">Allowed Models</label>
+            {availableModels.length === 0 ? (
+              <p className="text-sm text-gray-500">No models available.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {availableModels.map((model) => (
+                  <button
+                    key={model}
+                    type="button"
+                    onClick={() => toggleModel(model)}
+                    className={`px-3 py-1.5 rounded border text-sm transition-colors ${
+                      form.models.includes(model)
+                        ? 'bg-blue-100 border-blue-300 text-blue-800'
+                        : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    {model}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitState.loading || form.models.length === 0}>
               {submitState.loading ? "Saving..." : "Save"}
             </Button>
           </div>

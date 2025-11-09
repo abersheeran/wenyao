@@ -1,4 +1,6 @@
 import type { Context, Next } from 'hono'
+import { mongoDBService } from '../services/mongodb.js'
+import type { ApiKey } from '../types/apikey.js'
 
 /**
  * Admin API 鉴权中间件
@@ -59,4 +61,71 @@ export async function adminAuth(c: Context, next: Next) {
 
   // 验证通过,继续处理请求
   await next()
+}
+
+/**
+ * Proxy API 鉴权中间件
+ * 从数据库中读取 API Key 并验证
+ * 将验证后的 API Key 信息存储在 context 中供后续使用
+ */
+export async function proxyAuth(c: Context, next: Next) {
+  // 检查 MongoDB 连接
+  if (!mongoDBService.isConnected()) {
+    return c.json({
+      error: 'Service Unavailable',
+      message: 'Database connection not available'
+    }, 503)
+  }
+
+  // 从请求头获取 Authorization
+  const authHeader = c.req.header('Authorization')
+
+  if (!authHeader) {
+    return c.json({
+      error: 'Unauthorized',
+      message: 'Missing Authorization header'
+    }, 401)
+  }
+
+  // 验证 Bearer Token 格式
+  const parts = authHeader.split(' ')
+  if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    return c.json({
+      error: 'Unauthorized',
+      message: 'Invalid Authorization header format. Expected: Bearer <token>'
+    }, 401)
+  }
+
+  const token = parts[1]
+
+  try {
+    // 从数据库查询 API Key
+    const collection = mongoDBService.getApiKeysCollection()
+    const apiKey = await collection.findOne({ key: token })
+
+    if (!apiKey) {
+      return c.json({
+        error: 'Unauthorized',
+        message: 'Invalid API key'
+      }, 401)
+    }
+
+    // 更新最后使用时间
+    await collection.updateOne(
+      { key: token },
+      { $set: { lastUsedAt: new Date() } }
+    )
+
+    // 将 API Key 信息存储在 context 中,供后续使用
+    c.set('apiKey', apiKey as ApiKey)
+
+    // 验证通过,继续处理请求
+    await next()
+  } catch (error) {
+    console.error('[ProxyAuth] Error validating API key:', error)
+    return c.json({
+      error: 'Internal Server Error',
+      message: 'Failed to validate API key'
+    }, 500)
+  }
 }

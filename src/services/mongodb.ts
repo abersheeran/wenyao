@@ -1,5 +1,6 @@
 import { MongoClient, Db, ChangeStream, Collection } from 'mongodb'
 import type { ModelConfig, StatsDataPoint } from '../types/backend.js'
+import type { ApiKey } from '../types/apikey.js'
 
 export class MongoDBService {
   private client: MongoClient | null = null
@@ -17,6 +18,9 @@ export class MongoDBService {
 
       // Create index on model field for faster queries
       await this.getModelsCollection().createIndex({ model: 1 }, { unique: true })
+
+      // Create unique index on API key
+      await this.getApiKeysCollection().createIndex({ key: 1 }, { unique: true })
 
       // Initialize stats history collection
       await this.initializeStatsHistoryCollection()
@@ -60,6 +64,11 @@ export class MongoDBService {
   // Stats history collection
   getStatsHistoryCollection(): Collection<StatsDataPoint> {
     return this.getDatabase().collection<StatsDataPoint>('stats_history')
+  }
+
+  // API keys collection
+  getApiKeysCollection(): Collection<ApiKey> {
+    return this.getDatabase().collection<ApiKey>('apikeys')
   }
 
   // Initialize stats history collection with indexes

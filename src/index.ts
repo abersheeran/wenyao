@@ -8,7 +8,7 @@ import { mongoDBService } from './services/mongodb.js'
 import { configManager } from './services/config-manager.js'
 import { statsTracker } from './services/stats-tracker.js'
 import { instanceManager } from './services/instance-manager.js'
-import { adminAuth } from './middleware/auth.js'
+import { adminAuth, proxyAuth } from './middleware/auth.js'
 
 const app = new Hono()
 
@@ -27,6 +27,9 @@ app.get('/health', (c) => {
 
 // Apply admin authentication middleware to all admin routes
 app.use('/admin/*', adminAuth)
+
+// Apply proxy authentication middleware to all v1 routes
+app.use('/v1/*', proxyAuth)
 
 // Mount routes
 app.route('/admin', admin)

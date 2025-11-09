@@ -44,6 +44,14 @@ export type HistoricalStatsResponse = {
   message?: string;
 };
 
+export type ApiKey = {
+  key: string;
+  description: string;
+  models: string[];
+  createdAt: string | Date;
+  lastUsedAt?: string | Date;
+};
+
 /**
  * 从 localStorage 获取管理 API 密钥
  */
@@ -208,6 +216,60 @@ export function useAdminApi() {
       if (!res.ok) throw new Error("Failed to load all historical stats");
       const data = await res.json();
       return data.history ?? {};
+    },
+
+    // API Key operations
+    async listApiKeys(): Promise<ApiKey[]> {
+      const res = await fetch(`${base}/apikeys`, {
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) throw new Error("Failed to load API keys");
+      const data = await res.json();
+      return data.apiKeys ?? [];
+    },
+    async getApiKey(key: string): Promise<ApiKey> {
+      const res = await fetch(`${base}/apikeys/${encodeURIComponent(key)}`, {
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) throw new Error("Failed to load API key");
+      const data = await res.json();
+      return data.apiKey;
+    },
+    async createApiKey(payload: { key: string; description: string; models: string[] }): Promise<ApiKey> {
+      const res = await fetch(`${base}/apikeys`, {
+        method: "POST",
+        headers: createAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to create API key");
+      }
+      const data = await res.json();
+      return data.apiKey;
+    },
+    async updateApiKey(key: string, updates: { description?: string; models?: string[] }): Promise<ApiKey> {
+      const res = await fetch(`${base}/apikeys/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        headers: createAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(updates),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to update API key");
+      }
+      const data = await res.json();
+      return data.apiKey;
+    },
+    async deleteApiKey(key: string): Promise<void> {
+      const res = await fetch(`${base}/apikeys/${encodeURIComponent(key)}`, {
+        method: "DELETE",
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to delete API key");
+      }
     },
   };
 }
