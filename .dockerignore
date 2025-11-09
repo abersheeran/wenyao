@@ -1,0 +1,47 @@
+# Node modules
+node_modules/
+pages/node_modules/
+
+# Build outputs
+dist/
+pages/build/
+pages/.react-router/
+
+# Development files
+*.log
+npm-debug.log*
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Documentation
+README.md
+*.md
+docs/
+
+# Tests
+src/test/
+**/*.test.ts
+**/*.spec.ts
+.vitest/
+
+# Misc
+.DS_Store
+*.tsbuildinfo
+coverage/
