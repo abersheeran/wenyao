@@ -33,19 +33,83 @@ export function meta() {
 export default function Admin() {
   const api = useAdminApi();
   const [tab, setTab] = React.useState<string>("backends");
+  const [showApiKeyDialog, setShowApiKeyDialog] = React.useState(false);
+  const [apiKeyInput, setApiKeyInput] = React.useState("");
+  const [hasApiKey, setHasApiKey] = React.useState(false);
+
+  // 检查是否已有 API Key
+  React.useEffect(() => {
+    const storedKey = localStorage.getItem('adminApiKey');
+    setHasApiKey(!!storedKey);
+    if (!storedKey) {
+      setShowApiKeyDialog(true);
+    }
+  }, []);
+
+  const handleSaveApiKey = () => {
+    if (apiKeyInput.trim()) {
+      localStorage.setItem('adminApiKey', apiKeyInput.trim());
+      setHasApiKey(true);
+      setShowApiKeyDialog(false);
+      setApiKeyInput("");
+      // 刷新页面以使用新的 API Key
+      window.location.reload();
+    }
+  };
+
+  const handleClearApiKey = () => {
+    localStorage.removeItem('adminApiKey');
+    setHasApiKey(false);
+    setShowApiKeyDialog(true);
+  };
 
   return (
     <main className="container mx-auto p-4 space-y-4">
       <header className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Admin</h1>
-        <Tabs value={tab} onValueChange={(v) => setTab(v)}>
-          <TabsList>
-            <TabsTrigger value="backends">Backends</TabsTrigger>
-            <TabsTrigger value="stats">Stats</TabsTrigger>
-            <TabsTrigger value="metrics">Metrics</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <div className="flex items-center gap-4">
+          <Tabs value={tab} onValueChange={(v) => setTab(v)}>
+            <TabsList>
+              <TabsTrigger value="backends">Backends</TabsTrigger>
+              <TabsTrigger value="stats">Stats</TabsTrigger>
+              <TabsTrigger value="metrics">Metrics</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {hasApiKey && (
+            <Button variant="outline" size="sm" onClick={handleClearApiKey}>
+              更换密钥
+            </Button>
+          )}
+        </div>
       </header>
+
+      {/* API Key 输入对话框 */}
+      <Dialog open={showApiKeyDialog} onOpenChange={setShowApiKeyDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>请输入管理 API 密钥</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              需要提供 API 密钥才能访问管理接口
+            </p>
+            <Input
+              type="password"
+              placeholder="请输入 API Key"
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleSaveApiKey();
+                }
+              }}
+            />
+            <Button onClick={handleSaveApiKey} className="w-full">
+              确认
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {tab === "backends" && <BackendsPanel api={api} />}
       {tab === "stats" && <StatsPanel api={api} />}
@@ -63,11 +127,20 @@ function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   const [editingBackend, setEditingBackend] = React.useState<{ model: string; backend: BackendConfig } | null>(null);
 
   const [listState, load] = useAsyncFn(async () => {
-    const data = await api.listModels();
-    setModels(data);
-    // 默认展开所有模型
-    setExpandedModels(new Set(data.map(m => m.model)));
-    return data;
+    try {
+      const data = await api.listModels();
+      setModels(data);
+      // 默认展开所有模型
+      setExpandedModels(new Set(data.map(m => m.model)));
+      return data;
+    } catch (error: any) {
+      // 如果是鉴权错误,清除本地存储的密钥并刷新页面
+      if (error?.message?.includes('Unauthorized') || error?.message?.includes('401')) {
+        localStorage.removeItem('adminApiKey');
+        window.location.reload();
+      }
+      throw error;
+    }
   }, [api]);
 
   const [deleteModelState, deleteModel] = useAsyncFn(

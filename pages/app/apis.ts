@@ -44,19 +44,45 @@ export type HistoricalStatsResponse = {
   message?: string;
 };
 
+/**
+ * 从 localStorage 获取管理 API 密钥
+ */
+function getAdminApiKey(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('adminApiKey');
+}
+
+/**
+ * 创建带有鉴权头的 fetch 选项
+ */
+function createAuthHeaders(additionalHeaders?: HeadersInit): HeadersInit {
+  const headers: HeadersInit = { ...(additionalHeaders || {}) };
+  const apiKey = getAdminApiKey();
+
+  if (apiKey) {
+    (headers as Record<string, string>)['Authorization'] = `Bearer ${apiKey}`;
+  }
+
+  return headers;
+}
+
 export function useAdminApi() {
   const apiBase = (import.meta as any).env?.VITE_API_BASE ?? "";
   const base = apiBase ? `${String(apiBase).replace(/\/$/, "")}/admin` : "/admin";
   return {
     // Model-level operations
     async listModels(): Promise<(ModelConfig & { backends: (BackendConfig & { trafficRatio: number })[] })[]> {
-      const res = await fetch(`${base}/models`);
+      const res = await fetch(`${base}/models`, {
+        headers: createAuthHeaders()
+      });
       if (!res.ok) throw new Error("Failed to load models");
       const data = await res.json();
       return data.models ?? [];
     },
     async getModel(model: string): Promise<ModelConfig & { backends: (BackendConfig & { trafficRatio: number })[] }> {
-      const res = await fetch(`${base}/models/${encodeURIComponent(model)}`);
+      const res = await fetch(`${base}/models/${encodeURIComponent(model)}`, {
+        headers: createAuthHeaders()
+      });
       if (!res.ok) throw new Error("Failed to load model");
       const data = await res.json();
       return data.model;
@@ -64,7 +90,7 @@ export function useAdminApi() {
     async addModel(payload: Omit<ModelConfig, 'backends'> & { backends?: BackendConfig[] }): Promise<ModelConfig> {
       const res = await fetch(`${base}/models`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: createAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ ...payload, backends: payload.backends ?? [] }),
       });
       if (!res.ok) {
@@ -77,7 +103,7 @@ export function useAdminApi() {
     async updateModel(model: string, updates: { loadBalancingStrategy?: LoadBalancingStrategy; backends?: BackendConfig[] }): Promise<ModelConfig> {
       const res = await fetch(`${base}/models/${encodeURIComponent(model)}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: createAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(updates),
       });
       if (!res.ok) {
@@ -88,7 +114,10 @@ export function useAdminApi() {
       return data.model;
     },
     async deleteModel(model: string): Promise<void> {
-      const res = await fetch(`${base}/models/${encodeURIComponent(model)}`, { method: "DELETE" });
+      const res = await fetch(`${base}/models/${encodeURIComponent(model)}`, {
+        method: "DELETE",
+        headers: createAuthHeaders()
+      });
       if (!res.ok) {
         const error = await res.json();
         throw new Error(error.error || "Failed to delete model");
@@ -97,7 +126,9 @@ export function useAdminApi() {
 
     // Backend operations within models
     async listBackends(model: string): Promise<(BackendConfig & { trafficRatio: number })[]> {
-      const res = await fetch(`${base}/models/${encodeURIComponent(model)}/backends`);
+      const res = await fetch(`${base}/models/${encodeURIComponent(model)}/backends`, {
+        headers: createAuthHeaders()
+      });
       if (!res.ok) throw new Error("Failed to load backends");
       const data = await res.json();
       return data.backends ?? [];
@@ -105,7 +136,7 @@ export function useAdminApi() {
     async addBackend(model: string, payload: BackendConfig): Promise<ModelConfig> {
       const res = await fetch(`${base}/models/${encodeURIComponent(model)}/backends`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: createAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
@@ -118,7 +149,7 @@ export function useAdminApi() {
     async updateBackend(model: string, backendId: string, updates: Partial<Omit<BackendConfig, "id">>): Promise<ModelConfig> {
       const res = await fetch(`${base}/models/${encodeURIComponent(model)}/backends/${encodeURIComponent(backendId)}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: createAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(updates),
       });
       if (!res.ok) {
@@ -130,7 +161,8 @@ export function useAdminApi() {
     },
     async deleteBackend(model: string, backendId: string): Promise<void> {
       const res = await fetch(`${base}/models/${encodeURIComponent(model)}/backends/${encodeURIComponent(backendId)}`, {
-        method: "DELETE"
+        method: "DELETE",
+        headers: createAuthHeaders()
       });
       if (!res.ok) {
         const error = await res.json();
@@ -140,7 +172,9 @@ export function useAdminApi() {
 
     // Prometheus Metrics
     async getPrometheusMetrics(): Promise<string> {
-      const res = await fetch(`${base}/metrics`);
+      const res = await fetch(`${base}/metrics`, {
+        headers: createAuthHeaders()
+      });
       if (!res.ok) throw new Error("Failed to load Prometheus metrics");
       return await res.text();
     },
@@ -154,7 +188,9 @@ export function useAdminApi() {
       const queryString = params.toString();
       const url = `${base}/stats/history/${encodeURIComponent(backendId)}${queryString ? `?${queryString}` : ''}`;
 
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        headers: createAuthHeaders()
+      });
       if (!res.ok) throw new Error("Failed to load historical stats");
       return await res.json();
     },
@@ -166,7 +202,9 @@ export function useAdminApi() {
       const queryString = params.toString();
       const url = `${base}/stats/history${queryString ? `?${queryString}` : ''}`;
 
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        headers: createAuthHeaders()
+      });
       if (!res.ok) throw new Error("Failed to load all historical stats");
       const data = await res.json();
       return data.history ?? {};

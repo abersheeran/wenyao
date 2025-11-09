@@ -1,13 +1,26 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest'
 import { Hono } from 'hono'
 import admin from '../routes/admin.js'
 import proxy from '../routes/proxy.js'
 import { configManager } from '../services/config-manager.js'
 import { statsTracker } from '../services/stats-tracker.js'
+import { adminAuth } from '../middleware/auth.js'
 import type { ModelConfig, BackendConfig } from '../types/backend.js'
 
+// 测试用的 API Key
+const TEST_API_KEY = 'test-admin-key-12345'
+
 function req(path: string, init?: RequestInit) {
-  return new Request(`http://localhost${path}`, init)
+  // 为所有 admin 路径的请求自动添加鉴权头
+  const headers = new Headers(init?.headers)
+  if (path.startsWith('/admin')) {
+    headers.set('Authorization', `Bearer ${TEST_API_KEY}`)
+  }
+
+  return new Request(`http://localhost${path}`, {
+    ...init,
+    headers
+  })
 }
 
 async function clearAllModels() {
@@ -17,9 +30,64 @@ async function clearAllModels() {
   }
 }
 
+describe('Admin API - Authentication', () => {
+  const app = new Hono()
+  app.use('/admin/*', adminAuth)
+  app.route('/admin', admin)
+
+  beforeAll(() => {
+    process.env.ADMIN_APIKEYS = TEST_API_KEY
+  })
+
+  afterAll(() => {
+    delete process.env.ADMIN_APIKEYS
+  })
+
+  it('returns 401 when no Authorization header', async () => {
+    const res = await app.fetch(new Request('http://localhost/admin/models'))
+    expect(res.status).toBe(401)
+    const data = await res.json()
+    expect(data.error).toBe('Unauthorized')
+  })
+
+  it('returns 401 when invalid API key', async () => {
+    const res = await app.fetch(new Request('http://localhost/admin/models', {
+      headers: { 'Authorization': 'Bearer invalid-key' }
+    }))
+    expect(res.status).toBe(401)
+    const data = await res.json()
+    expect(data.error).toBe('Unauthorized')
+  })
+
+  it('returns 401 when wrong Authorization format', async () => {
+    const res = await app.fetch(new Request('http://localhost/admin/models', {
+      headers: { 'Authorization': 'Basic sometoken' }
+    }))
+    expect(res.status).toBe(401)
+    const data = await res.json()
+    expect(data.error).toBe('Unauthorized')
+  })
+
+  it('allows access with valid API key', async () => {
+    const res = await app.fetch(req('/admin/models'))
+    expect(res.status).toBe(200)
+  })
+})
+
 describe('Admin API - Models & Backends', () => {
   const app = new Hono()
+  // 应用鉴权中间件
+  app.use('/admin/*', adminAuth)
   app.route('/admin', admin)
+
+  // 设置测试环境的 API Key
+  beforeAll(() => {
+    process.env.ADMIN_APIKEYS = TEST_API_KEY
+  })
+
+  afterAll(() => {
+    delete process.env.ADMIN_APIKEYS
+  })
 
   beforeEach(async () => {
     await clearAllModels()
@@ -118,7 +186,18 @@ describe('Admin API - Models & Backends', () => {
 
 describe('Admin API - Statistics', () => {
   const app = new Hono()
+  // 应用鉴权中间件
+  app.use('/admin/*', adminAuth)
   app.route('/admin', admin)
+
+  // 设置测试环境的 API Key
+  beforeAll(() => {
+    process.env.ADMIN_APIKEYS = TEST_API_KEY
+  })
+
+  afterAll(() => {
+    delete process.env.ADMIN_APIKEYS
+  })
 
   beforeEach(async () => {
     await clearAllModels()
