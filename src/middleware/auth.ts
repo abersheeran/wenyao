@@ -1,6 +1,6 @@
 import type { Context, Next } from 'hono'
 import { mongoDBService } from '../services/mongodb.js'
-import type { ApiKey } from '../types/apikey.js'
+import type { Variables } from '../types/context.js'
 
 /**
  * Admin API 鉴权中间件
@@ -68,7 +68,7 @@ export async function adminAuth(c: Context, next: Next) {
  * 从数据库中读取 API Key 并验证
  * 将验证后的 API Key 信息存储在 context 中供后续使用
  */
-export async function proxyAuth(c: Context, next: Next) {
+export async function proxyAuth(c: Context<{ Variables: Variables }>, next: Next) {
   // 检查 MongoDB 连接
   if (!mongoDBService.isConnected()) {
     return c.json({
@@ -101,7 +101,11 @@ export async function proxyAuth(c: Context, next: Next) {
   try {
     // 从数据库查询 API Key
     const collection = mongoDBService.getApiKeysCollection()
-    const apiKey = await collection.findOne({ key: token })
+    const apiKey = await collection.findOneAndUpdate(
+      { key: token },
+      { $set: { lastUsedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
 
     if (!apiKey) {
       return c.json({
@@ -110,14 +114,8 @@ export async function proxyAuth(c: Context, next: Next) {
       }, 401)
     }
 
-    // 更新最后使用时间
-    await collection.updateOne(
-      { key: token },
-      { $set: { lastUsedAt: new Date() } }
-    )
-
     // 将 API Key 信息存储在 context 中,供后续使用
-    c.set('apiKey', apiKey as ApiKey)
+    c.set('apiKey', apiKey)
 
     // 验证通过,继续处理请求
     await next()

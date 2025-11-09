@@ -4,8 +4,12 @@ import { loadBalancer } from '../services/load-balancer.js'
 import { statsTracker } from '../services/stats-tracker.js'
 import type { ChatCompletionRequest } from '../types/backend.js'
 import type { ApiKey } from '../types/apikey.js'
+import type { Variables } from '../types/context.js'
+import { proxyAuth } from '../middleware/auth.js'
 
-const proxyApp = new Hono()
+const proxyApp = new Hono<{ Variables: Variables }>()
+
+proxyApp.use('*', proxyAuth);
 
 // POST /v1/chat/completions - Proxy to backend with load balancing
 proxyApp.post('/chat/completions', async (c) => {

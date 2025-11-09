@@ -16,8 +16,11 @@ import {
   updateApiKeySchema,
   apiKeyParamSchema
 } from '../schemas/apikey.js'
+import { adminAuth } from '../middleware/auth.js'
 
 const admin = new Hono()
+
+admin.use('*', adminAuth)
 
 // ===== Model Configuration Endpoints =====
 
