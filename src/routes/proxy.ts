@@ -6,6 +6,7 @@ import type { ChatCompletionRequest } from '../types/backend.js'
 import type { ApiKey } from '../types/apikey.js'
 import type { Variables } from '../types/context.js'
 import { proxyAuth } from '../middleware/auth.js'
+import { proxy } from 'hono/proxy'
 
 const proxyApp = new Hono<{ Variables: Variables }>()
 
@@ -68,9 +69,10 @@ proxyApp.post('/chat/completions', async (c) => {
 
     try {
       // Call backend using fetch
-      const response = await fetch(new URL("/v1/chat/completions", backend.url), {
+      const response = await proxy(new URL("/v1/chat/completions", backend.url), {
         method: 'POST',
         headers: {
+          ...c.req.header(),
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${backend.apiKey}`
         },
