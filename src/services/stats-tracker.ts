@@ -6,6 +6,11 @@ import { instanceManager } from './instance-manager.js'
 export class StatsTracker {
   private registry: Registry
   private historyInterval: NodeJS.Timeout | null = null
+  private lastSnapshotStats: Map<string, {
+    totalRequests: number
+    successfulRequests: number
+    failedRequests: number
+  }> = new Map()
 
   // Prometheus metrics
   private requestsTotal: Counter
@@ -231,17 +236,45 @@ export class StatsTracker {
       const collection = mongoDBService.getStatsHistoryCollection()
 
       // Prepare data points for all backends
-      const dataPoints: StatsDataPoint[] = allStats.map(stats => ({
-        instanceId: instanceManager.getInstanceId(),
-        backendId: stats.backendId,
-        timestamp,
-        totalRequests: stats.totalRequests,
-        successfulRequests: stats.successfulRequests,
-        failedRequests: stats.failedRequests,
-        successRate: stats.successRate,
-        averageTTFT: stats.averageTTFT,
-        requestsInPeriod: stats.totalRequests // For the first snapshot, use total requests
-      }))
+      const dataPoints: StatsDataPoint[] = allStats.map(stats => {
+        // Calculate incremental requests since last snapshot
+        const lastSnapshot = this.lastSnapshotStats.get(stats.backendId)
+        const requestsInPeriod = lastSnapshot
+          ? stats.totalRequests - lastSnapshot.totalRequests
+          : 0 // First snapshot: don't include historical data
+
+        const successfulInPeriod = lastSnapshot
+          ? stats.successfulRequests - lastSnapshot.successfulRequests
+          : 0
+
+        const failedInPeriod = lastSnapshot
+          ? stats.failedRequests - lastSnapshot.failedRequests
+          : 0
+
+        // Calculate success rate for this period
+        const successRate = requestsInPeriod > 0
+          ? successfulInPeriod / requestsInPeriod
+          : 0
+
+        // Update last snapshot stats
+        this.lastSnapshotStats.set(stats.backendId, {
+          totalRequests: stats.totalRequests,
+          successfulRequests: stats.successfulRequests,
+          failedRequests: stats.failedRequests
+        })
+
+        return {
+          instanceId: instanceManager.getInstanceId(),
+          backendId: stats.backendId,
+          timestamp,
+          totalRequests: requestsInPeriod, // Store incremental count instead of cumulative
+          successfulRequests: successfulInPeriod,
+          failedRequests: failedInPeriod,
+          successRate,
+          averageTTFT: stats.averageTTFT,
+          requestsInPeriod
+        }
+      })
 
       // Save all data points (skip if no backends have stats)
       if (dataPoints.length > 0) {
