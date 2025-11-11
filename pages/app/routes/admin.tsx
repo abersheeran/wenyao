@@ -390,7 +390,7 @@ function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean; onOpen
             <Select
               value={form.loadBalancingStrategy}
               onValueChange={(v) => setForm({ ...form, loadBalancingStrategy: v as LoadBalancingStrategy })}
-           >
+            >
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
@@ -887,11 +887,10 @@ function AddApiKeyDialog({
                     key={model}
                     type="button"
                     onClick={() => toggleModel(model)}
-                    className={`px-3 py-1.5 rounded border text-sm transition-colors ${
-                      form.models.includes(model)
+                    className={`px-3 py-1.5 rounded border text-sm transition-colors ${form.models.includes(model)
                         ? 'bg-blue-100 border-blue-300 text-blue-800'
                         : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
-                    }`}
+                      }`}
                   >
                     {model}
                   </button>
@@ -992,11 +991,10 @@ function EditApiKeyDialog({
                     key={model}
                     type="button"
                     onClick={() => toggleModel(model)}
-                    className={`px-3 py-1.5 rounded border text-sm transition-colors ${
-                      form.models.includes(model)
+                    className={`px-3 py-1.5 rounded border text-sm transition-colors ${form.models.includes(model)
                         ? 'bg-blue-100 border-blue-300 text-blue-800'
                         : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
-                    }`}
+                      }`}
                   >
                     {model}
                   </button>
@@ -1152,19 +1150,17 @@ function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDa
     const config: Record<string, { label: string; color: string }> = {};
     backendIds.forEach((id) => {
       const blue = "var(--chart-2)"; // unified blue from theme palette
-      const green = "var(--chart-3)"; // for streaming
-      const orange = "var(--chart-4)"; // for non-streaming
       config[`successRate_${id}`] = {
         label: id,
         color: blue,
       };
       config[`streamingTtft_${id}`] = {
         label: `${id} (Streaming)`,
-        color: green,
+        color: blue,
       };
       config[`nonStreamingTtft_${id}`] = {
         label: `${id} (Non-Streaming)`,
-        color: orange,
+        color: blue,
       };
       config[`requests_${id}`] = {
         label: id,
@@ -1263,24 +1259,24 @@ function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDa
               content={<ChartTooltipContent indicator="dot" />}
             />
             {backendIds.map((id) => (
-              <React.Fragment key={id}>
-                <Area
-                  dataKey={`streamingTtft_${id}`}
-                  type="linear"
-                  fill={`var(--color-streamingTtft_${id})`}
-                  fillOpacity={0.15}
-                  stroke={`var(--color-streamingTtft_${id})`}
-                  strokeWidth={2}
-                />
-                <Area
-                  dataKey={`nonStreamingTtft_${id}`}
-                  type="linear"
-                  fill={`var(--color-nonStreamingTtft_${id})`}
-                  fillOpacity={0.15}
-                  stroke={`var(--color-nonStreamingTtft_${id})`}
-                  strokeWidth={2}
-                />
-              </React.Fragment>
+              <Area key={`streaming_${id}`}
+                dataKey={`streamingTtft_${id}`}
+                type="linear"
+                fill={`var(--color-streamingTtft_${id})`}
+                fillOpacity={0.15}
+                stroke={`var(--color-streamingTtft_${id})`}
+                strokeWidth={2}
+              />
+            ))}
+            {backendIds.map((id) => (
+              <Area key={`nonStreaming_${id}`}
+                dataKey={`nonStreamingTtft_${id}`}
+                type="linear"
+                fill={`var(--color-nonStreamingTtft_${id})`}
+                fillOpacity={0.15}
+                stroke={`var(--color-nonStreamingTtft_${id})`}
+                strokeWidth={2}
+              />
             ))}
           </AreaChart>
         </ChartContainer>

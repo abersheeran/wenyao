@@ -257,8 +257,8 @@ admin.get('/stats', async (c) => {
               { $divide: ['$successfulRequests', '$totalRequests'] }
             ]
           },
-          averageStreamingTTFT: 1,
-          averageNonStreamingTTFT: 1,
+          averageStreamingTTFT: { $ifNull: ['$averageStreamingTTFT', 0] },
+          averageNonStreamingTTFT: { $ifNull: ['$averageNonStreamingTTFT', 0] },
           instanceCount: 1
         }
       }
@@ -357,8 +357,8 @@ admin.get('/stats/history', async (c) => {
                 { $divide: ['$successfulRequests', '$totalRequests'] }
               ]
             },
-            averageStreamingTTFT: 1,
-            averageNonStreamingTTFT: 1
+            averageStreamingTTFT: { $ifNull: ['$averageStreamingTTFT', 0] },
+            averageNonStreamingTTFT: { $ifNull: ['$averageNonStreamingTTFT', 0] }
           }
         },
         { $sort: { timestamp: 1 } }
