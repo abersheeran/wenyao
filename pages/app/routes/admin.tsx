@@ -1134,7 +1134,8 @@ function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDa
 
         const entry = timeMap.get(timeKey);
         entry[`successRate_${backendId}`] = point.successRate * 100;
-        entry[`ttft_${backendId}`] = point.averageTTFT;
+        entry[`streamingTtft_${backendId}`] = point.averageStreamingTTFT || 0;
+        entry[`nonStreamingTtft_${backendId}`] = point.averageNonStreamingTTFT || 0;
         entry[`requests_${backendId}`] = point.totalRequests;
       });
     });
@@ -1151,13 +1152,19 @@ function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDa
     const config: Record<string, { label: string; color: string }> = {};
     backendIds.forEach((id) => {
       const blue = "var(--chart-2)"; // unified blue from theme palette
+      const green = "var(--chart-3)"; // for streaming
+      const orange = "var(--chart-4)"; // for non-streaming
       config[`successRate_${id}`] = {
         label: id,
         color: blue,
       };
-      config[`ttft_${id}`] = {
-        label: id,
-        color: blue,
+      config[`streamingTtft_${id}`] = {
+        label: `${id} (Streaming)`,
+        color: green,
+      };
+      config[`nonStreamingTtft_${id}`] = {
+        label: `${id} (Non-Streaming)`,
+        color: orange,
       };
       config[`requests_${id}`] = {
         label: id,
@@ -1221,11 +1228,11 @@ function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDa
         </ChartContainer>
       </div>
 
-      {/* TTFT Chart */}
+      {/* Streaming vs Non-Streaming TTFT Chart */}
       <div>
         <div className="mb-4">
-          <h3 className="text-base font-medium mb-1">平均 TTFT 趋势</h3>
-          <p className="text-sm text-muted-foreground">各 Backend 首 Token 响应时间 (毫秒)</p>
+          <h3 className="text-base font-medium mb-1">流式 vs 非流式 TTFT 对比</h3>
+          <p className="text-sm text-muted-foreground">分别显示流式请求和非流式请求的首 Token 响应时间 (毫秒)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <AreaChart
@@ -1255,17 +1262,25 @@ function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDa
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {backendIds.map((id, index) => (
-              <Area
-                key={id}
-                dataKey={`ttft_${id}`}
-                type="linear"
-                fill={`var(--color-ttft_${id})`}
-                fillOpacity={0.25}
-                stroke={`var(--color-ttft_${id})`}
-                strokeWidth={2}
-                stackId="a"
-              />
+            {backendIds.map((id) => (
+              <React.Fragment key={id}>
+                <Area
+                  dataKey={`streamingTtft_${id}`}
+                  type="linear"
+                  fill={`var(--color-streamingTtft_${id})`}
+                  fillOpacity={0.15}
+                  stroke={`var(--color-streamingTtft_${id})`}
+                  strokeWidth={2}
+                />
+                <Area
+                  dataKey={`nonStreamingTtft_${id}`}
+                  type="linear"
+                  fill={`var(--color-nonStreamingTtft_${id})`}
+                  fillOpacity={0.15}
+                  stroke={`var(--color-nonStreamingTtft_${id})`}
+                  strokeWidth={2}
+                />
+              </React.Fragment>
             ))}
           </AreaChart>
         </ChartContainer>

@@ -107,14 +107,15 @@ describe('StatsTracker', () => {
   })
 
   it('should record a successful request', async () => {
-    statsTracker.recordSuccess('backend-1', 100)
+    statsTracker.recordSuccess('backend-1', 100, 1000, true)
 
     const stats = await statsTracker.getStats('backend-1')
     expect(stats?.totalRequests).toBe(1)
     expect(stats?.successfulRequests).toBe(1)
     expect(stats?.failedRequests).toBe(0)
     expect(stats?.successRate).toBe(1)
-    expect(stats?.averageTTFT).toBe(100)
+    expect(stats?.averageStreamingTTFT).toBe(100)
+    expect(stats?.averageNonStreamingTTFT).toBe(0)
   })
 
   it('should record a failed request', async () => {
@@ -127,13 +128,30 @@ describe('StatsTracker', () => {
     expect(stats?.successRate).toBe(0)
   })
 
-  it('should calculate average TTFT correctly', async () => {
-    statsTracker.recordSuccess('backend-1', 100)
-    statsTracker.recordSuccess('backend-1', 200)
-    statsTracker.recordSuccess('backend-1', 150)
+  it('should calculate average streaming TTFT correctly', async () => {
+    statsTracker.recordSuccess('backend-1', 100, 1000, true)
+    statsTracker.recordSuccess('backend-1', 200, 1000, true)
+    statsTracker.recordSuccess('backend-1', 150, 1000, true)
 
     const stats = await statsTracker.getStats('backend-1')
-    expect(stats?.averageTTFT).toBeCloseTo(150, 1)
+    expect(stats?.averageStreamingTTFT).toBeCloseTo(150, 1)
+  })
+
+  it('should calculate average non-streaming TTFT correctly', async () => {
+    statsTracker.recordSuccess('backend-2', 50, 1000, false)
+    statsTracker.recordSuccess('backend-2', 100, 1000, false)
+    statsTracker.recordSuccess('backend-2', 75, 1000, false)
+
+    const stats = await statsTracker.getStats('backend-2')
+    expect(stats?.averageNonStreamingTTFT).toBeCloseTo(75, 1)
+  })
+
+  it('should handle undefined isStream as non-streaming', async () => {
+    statsTracker.recordSuccess('backend-3', 80, 1000)
+
+    const stats = await statsTracker.getStats('backend-3')
+    expect(stats?.averageNonStreamingTTFT).toBe(80)
+    expect(stats?.averageStreamingTTFT).toBe(0)
   })
 
   it('should calculate success rate correctly', async () => {
@@ -180,7 +198,7 @@ describe('StatsTracker', () => {
   })
 
   it('should include instance label in Prometheus metrics', async () => {
-    statsTracker.recordSuccess('backend-1', 100, 1500)
+    statsTracker.recordSuccess('backend-1', 100, 1500, true)
     statsTracker.recordFailure('backend-2', 3000)
 
     const metrics = await statsTracker.getMetrics()
@@ -193,7 +211,7 @@ describe('StatsTracker', () => {
     // Verify all metric types include instance label
     expect(metrics).toMatch(/llm_proxy_requests_total\{instance="[^"]+",backend_id="backend-1",status="success"\}/)
     expect(metrics).toMatch(/llm_proxy_requests_total\{instance="[^"]+",backend_id="backend-2",status="failure"\}/)
-    expect(metrics).toMatch(/llm_proxy_ttft_seconds_sum\{instance="[^"]+",backend_id="backend-1"\}/)
+    expect(metrics).toMatch(/llm_proxy_ttft_seconds_sum\{instance="[^"]+",backend_id="backend-1",stream_type="streaming"\}/)
     expect(metrics).toMatch(/llm_proxy_request_duration_seconds_sum\{instance="[^"]+",backend_id="backend-1",status="success"\}/)
   })
 })

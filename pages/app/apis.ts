@@ -20,7 +20,8 @@ export type BackendStats = {
   successfulRequests: number;
   failedRequests: number;
   successRate: number;
-  averageTTFT: number;
+  averageStreamingTTFT: number;
+  averageNonStreamingTTFT: number;
   ttftSamples: number[];
 };
 
@@ -32,7 +33,8 @@ export type StatsDataPoint = {
   successfulRequests: number;
   failedRequests: number;
   successRate: number;
-  averageTTFT: number;
+  averageStreamingTTFT: number;
+  averageNonStreamingTTFT: number;
   requestsInPeriod: number;
 };
 

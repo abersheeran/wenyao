@@ -13,9 +13,10 @@ export class LoadBalancer {
    * Select a backend for a specific model using the configured load balancing strategy
    * @param model - The model name from the OpenAI request
    * @param forceBackendId - Optional backend ID to force selection (bypasses load balancing)
+   * @param isStream - Whether this is a streaming request (used for TTFT-based strategies)
    * @returns Selected backend or null if none available
    */
-  async selectBackend(model: string, forceBackendId?: string): Promise<BackendConfig | null> {
+  async selectBackend(model: string, forceBackendId?: string, isStream?: boolean): Promise<BackendConfig | null> {
     const modelConfig = this.configManager.getModelConfig(model)
 
     if (!modelConfig) {
@@ -47,19 +48,19 @@ export class LoadBalancer {
     }
 
     // Apply load balancing strategy
-    return this.applyStrategy(modelConfig, enabledBackends)
+    return this.applyStrategy(modelConfig, enabledBackends, isStream)
   }
 
   /**
    * Apply the configured load balancing strategy to select a backend
    */
-  private async applyStrategy(modelConfig: ModelConfig, enabledBackends: BackendConfig[]): Promise<BackendConfig> {
+  private async applyStrategy(modelConfig: ModelConfig, enabledBackends: BackendConfig[], isStream?: boolean): Promise<BackendConfig> {
     switch (modelConfig.loadBalancingStrategy) {
       case 'weighted':
         return this.selectByWeight(enabledBackends)
 
       case 'lowest-ttft':
-        return await this.selectByLowestTTFT(enabledBackends)
+        return await this.selectByLowestTTFT(enabledBackends, isStream)
 
       case 'min-error-rate':
         return await this.selectByMinErrorRate(enabledBackends)
@@ -100,14 +101,27 @@ export class LoadBalancer {
   /**
    * Lowest TTFT (Time To First Token) strategy
    * Selects the backend with the lowest average TTFT
+   * Uses stream-specific TTFT based on isStream parameter (undefined treated as non-streaming)
    */
-  private async selectByLowestTTFT(backends: BackendConfig[]): Promise<BackendConfig> {
+  private async selectByLowestTTFT(backends: BackendConfig[], isStream?: boolean): Promise<BackendConfig> {
+    // Treat undefined isStream as false (non-streaming)
+    const useStreaming = isStream === true
+
     // Get stats for all backends
     const backendStatsPromises = backends.map(async backend => {
       const stats = await statsTracker.getStats(backend.id)
+
+      // Choose TTFT metric based on stream type
+      let averageTTFT: number
+      if (stats) {
+        averageTTFT = useStreaming ? stats.averageStreamingTTFT : stats.averageNonStreamingTTFT
+      } else {
+        averageTTFT = 0
+      }
+
       return {
         backend,
-        averageTTFT: stats?.averageTTFT ?? Infinity // Use Infinity if no stats available
+        averageTTFT
       }
     })
 

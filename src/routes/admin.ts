@@ -236,7 +236,8 @@ admin.get('/stats', async (c) => {
           totalRequests: { $sum: '$latestSnapshot.totalRequests' },
           successfulRequests: { $sum: '$latestSnapshot.successfulRequests' },
           failedRequests: { $sum: '$latestSnapshot.failedRequests' },
-          averageTTFT: { $avg: '$latestSnapshot.averageTTFT' },
+          averageStreamingTTFT: { $avg: '$latestSnapshot.averageStreamingTTFT' },
+          averageNonStreamingTTFT: { $avg: '$latestSnapshot.averageNonStreamingTTFT' },
           instanceCount: { $sum: 1 }
         }
       },
@@ -256,7 +257,8 @@ admin.get('/stats', async (c) => {
               { $divide: ['$successfulRequests', '$totalRequests'] }
             ]
           },
-          averageTTFT: 1,
+          averageStreamingTTFT: 1,
+          averageNonStreamingTTFT: 1,
           instanceCount: 1
         }
       }
@@ -336,7 +338,8 @@ admin.get('/stats/history', async (c) => {
             totalRequests: { $sum: '$totalRequests' },
             successfulRequests: { $sum: '$successfulRequests' },
             failedRequests: { $sum: '$failedRequests' },
-            averageTTFT: { $avg: '$averageTTFT' }
+            averageStreamingTTFT: { $avg: '$averageStreamingTTFT' },
+            averageNonStreamingTTFT: { $avg: '$averageNonStreamingTTFT' }
           }
         },
         {
@@ -354,7 +357,8 @@ admin.get('/stats/history', async (c) => {
                 { $divide: ['$successfulRequests', '$totalRequests'] }
               ]
             },
-            averageTTFT: 1
+            averageStreamingTTFT: 1,
+            averageNonStreamingTTFT: 1
           }
         },
         { $sort: { timestamp: 1 } }
@@ -408,7 +412,8 @@ admin.get('/stats/history', async (c) => {
               successfulRequests: 0,
               failedRequests: 0,
               successRate: 0,
-              averageTTFT: 0
+              averageStreamingTTFT: 0,
+              averageNonStreamingTTFT: 0
             })
           }
         }

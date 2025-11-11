@@ -43,8 +43,8 @@ proxyApp.post('/chat/completions', async (c) => {
     // Get backend-id from header if specified (for forced backend selection)
     const backendId = c.req.header('X-Backend-ID')
 
-    // Select backend based on model and optional backend-id
-    const backend = await loadBalancer.selectBackend(requestBody.model, backendId)
+    // Select backend based on model, optional backend-id, and stream type
+    const backend = await loadBalancer.selectBackend(requestBody.model, backendId, requestBody.stream)
 
     if (!backend) {
       return c.json({
@@ -123,7 +123,7 @@ proxyApp.post('/chat/completions', async (c) => {
 
             // Record success with TTFT and duration
             const duration = Date.now() - startTime
-            statsTracker.recordSuccess(backend.id, firstTokenTime, duration)
+            statsTracker.recordSuccess(backend.id, firstTokenTime, duration, true)
             statsTracker.decrementActive(backend.id)
           } catch (error) {
             const duration = Date.now() - startTime
@@ -145,7 +145,7 @@ proxyApp.post('/chat/completions', async (c) => {
 
         // For non-streaming, TTFT and duration are the same
         const duration = Date.now() - startTime
-        statsTracker.recordSuccess(backend.id, duration, duration)
+        statsTracker.recordSuccess(backend.id, duration, duration, false)
         statsTracker.decrementActive(backend.id)
 
         return c.json(responseBody)

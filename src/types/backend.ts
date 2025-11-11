@@ -24,7 +24,8 @@ export interface BackendStats {
   successfulRequests: number
   failedRequests: number
   successRate: number
-  averageTTFT: number // in milliseconds
+  averageStreamingTTFT: number // in milliseconds - for streaming requests
+  averageNonStreamingTTFT: number // in milliseconds - for non-streaming requests
   ttftSamples: number[]
 }
 
@@ -37,7 +38,8 @@ export interface StatsDataPoint {
   successfulRequests: number
   failedRequests: number
   successRate: number
-  averageTTFT: number // in milliseconds
+  averageStreamingTTFT: number // in milliseconds - for streaming requests
+  averageNonStreamingTTFT: number // in milliseconds - for non-streaming requests
   requestsInPeriod: number // Number of requests in this time period
 }
 

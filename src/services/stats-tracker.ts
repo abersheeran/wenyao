@@ -42,7 +42,7 @@ export class StatsTracker {
     this.ttftHistogram = new Histogram({
       name: 'llm_proxy_ttft_seconds',
       help: 'Time to first token in seconds',
-      labelNames: ['instance', 'backend_id'],
+      labelNames: ['instance', 'backend_id', 'stream_type'],
       buckets: [0.1, 0.25, 0.5, 1, 2, 5, 10],
       registers: [this.registry]
     })
@@ -57,7 +57,7 @@ export class StatsTracker {
   }
 
   // Record a successful request
-  recordSuccess(backendId: string, ttft?: number, duration?: number): void {
+  recordSuccess(backendId: string, ttft?: number, duration?: number, isStream?: boolean): void {
     const instance = instanceManager.getInstanceId()
     this.requestsTotal.inc({ instance, backend_id: backendId, status: 'success' })
 
@@ -66,7 +66,9 @@ export class StatsTracker {
     }
 
     if (ttft !== undefined) {
-      this.ttftHistogram.observe({ instance, backend_id: backendId }, ttft / 1000)
+      // Treat undefined isStream as false (non-streaming)
+      const streamType = (isStream === true) ? 'streaming' : 'non-streaming'
+      this.ttftHistogram.observe({ instance, backend_id: backendId, stream_type: streamType }, ttft / 1000)
     }
   }
 
@@ -105,8 +107,10 @@ export class StatsTracker {
 
     let successfulRequests = 0
     let failedRequests = 0
-    let ttftSum = 0
-    let ttftCount = 0
+    let streamingTtftSum = 0
+    let streamingTtftCount = 0
+    let nonStreamingTtftSum = 0
+    let nonStreamingTtftCount = 0
 
     for (const line of lines) {
       if (line.startsWith('#') || line.trim() === '') continue
@@ -127,10 +131,23 @@ export class StatsTracker {
       if (line.includes('llm_proxy_ttft_seconds') &&
           line.includes(`instance="${instance}"`) &&
           line.includes(`backend_id="${backendId}"`)) {
-        if (line.includes('_sum')) {
-          ttftSum = parseFloat(line.split(' ')[1])
-        } else if (line.includes('_count')) {
-          ttftCount = parseFloat(line.split(' ')[1])
+
+        // Parse streaming TTFT
+        if (line.includes('stream_type="streaming"')) {
+          if (line.includes('_sum')) {
+            streamingTtftSum = parseFloat(line.split(' ')[1])
+          } else if (line.includes('_count')) {
+            streamingTtftCount = parseFloat(line.split(' ')[1])
+          }
+        }
+
+        // Parse non-streaming TTFT
+        if (line.includes('stream_type="non-streaming"')) {
+          if (line.includes('_sum')) {
+            nonStreamingTtftSum = parseFloat(line.split(' ')[1])
+          } else if (line.includes('_count')) {
+            nonStreamingTtftCount = parseFloat(line.split(' ')[1])
+          }
         }
       }
     }
@@ -138,7 +155,8 @@ export class StatsTracker {
     const totalRequests = successfulRequests + failedRequests
     if (totalRequests === 0) return undefined
 
-    const averageTTFT = ttftCount > 0 ? (ttftSum / ttftCount) * 1000 : 0
+    const averageStreamingTTFT = streamingTtftCount > 0 ? (streamingTtftSum / streamingTtftCount) * 1000 : 0
+    const averageNonStreamingTTFT = nonStreamingTtftCount > 0 ? (nonStreamingTtftSum / nonStreamingTtftCount) * 1000 : 0
 
     return {
       backendId,
@@ -146,7 +164,8 @@ export class StatsTracker {
       successfulRequests,
       failedRequests,
       successRate: totalRequests > 0 ? successfulRequests / totalRequests : 0,
-      averageTTFT,
+      averageStreamingTTFT,
+      averageNonStreamingTTFT,
       ttftSamples: []
     }
   }
@@ -271,7 +290,8 @@ export class StatsTracker {
           successfulRequests: successfulInPeriod,
           failedRequests: failedInPeriod,
           successRate,
-          averageTTFT: stats.averageTTFT,
+          averageStreamingTTFT: stats.averageStreamingTTFT,
+          averageNonStreamingTTFT: stats.averageNonStreamingTTFT,
           requestsInPeriod
         }
       })
