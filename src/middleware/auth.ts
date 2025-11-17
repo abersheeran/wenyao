@@ -71,6 +71,7 @@ export async function adminAuth(c: Context, next: Next) {
 export async function proxyAuth(c: Context<{ Variables: Variables }>, next: Next) {
   // 检查 MongoDB 连接
   if (!mongoDBService.isConnected()) {
+    console.error('[ProxyAuth] MongoDB is not connected')
     return c.json({
       error: 'Service Unavailable',
       message: 'Database connection not available'

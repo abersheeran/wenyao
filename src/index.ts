@@ -38,17 +38,13 @@ async function startServer() {
 
   // Try to connect to MongoDB if MONGODB_URL is provided
   if (process.env.MONGODB_URL) {
-    try {
-      console.log('Connecting to MongoDB...')
-      await mongoDBService.connect()
-      await configManager.initializeFromMongoDB()
-      console.log('MongoDB integration enabled')
+    console.log('Connecting to MongoDB...')
+    await mongoDBService.connect()
+    await configManager.initializeFromMongoDB()
+    console.log('MongoDB integration enabled')
 
-      // Start historical stats tracking (saves snapshot every 15 seconds)
-      statsTracker.startHistoryTracking()
-    } catch (error) {
-      console.error('Failed to connect to MongoDB, using in-memory storage:', error)
-    }
+    // Start historical stats tracking (saves snapshot every 15 seconds)
+    statsTracker.startHistoryTracking()
   } else {
     console.log('MONGODB_URL not provided, using in-memory storage')
   }

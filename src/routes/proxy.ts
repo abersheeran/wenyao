@@ -47,6 +47,7 @@ proxyApp.post('/chat/completions', async (c) => {
     const backend = await loadBalancer.selectBackend(requestBody.model, backendId, requestBody.stream)
 
     if (!backend) {
+      console.log(`[Proxy] No available backend for model: ${requestBody.model}, backendId: ${backendId || 'none'}`)
       return c.json({
         error: {
           message: `No enabled backends available for model: ${requestBody.model}`,
