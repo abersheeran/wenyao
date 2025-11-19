@@ -73,7 +73,6 @@ proxyApp.post('/chat/completions', async (c) => {
       const response = await proxy(new URL("/v1/chat/completions", backend.url), {
         method: 'POST',
         headers: {
-          ...c.req.header(),
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${backend.apiKey}`
         },
