@@ -63,7 +63,7 @@ export class LoadBalancer {
         return await this.selectByLowestTTFT(enabledBackends, isStream)
 
       case 'min-error-rate':
-        return await this.selectByMinErrorRate(enabledBackends)
+        return await this.selectByMinErrorRate(enabledBackends, modelConfig)
 
       default:
         // Fallback to weighted strategy
@@ -102,14 +102,15 @@ export class LoadBalancer {
    * Lowest TTFT (Time To First Token) strategy
    * Selects the backend with the lowest average TTFT
    * Uses stream-specific TTFT based on isStream parameter (undefined treated as non-streaming)
+   * Uses time-windowed statistics (15 minutes) for more responsive selection
    */
   private async selectByLowestTTFT(backends: BackendConfig[], isStream?: boolean): Promise<BackendConfig> {
     // Treat undefined isStream as false (non-streaming)
     const useStreaming = isStream === true
 
-    // Get stats for all backends
+    // Get recent stats for all backends (15 minute window)
     const backendStatsPromises = backends.map(async backend => {
-      const stats = await statsTracker.getStats(backend.id)
+      const stats = await statsTracker.getRecentStats(backend.id, 15)
 
       // Choose TTFT metric based on stream type
       let averageTTFT: number
@@ -135,44 +136,77 @@ export class LoadBalancer {
   }
 
   /**
-   * Minimum error rate strategy
-   * Dynamically adjusts traffic based on error rates
-   * Backends with higher error rates receive less traffic
+   * Minimum error rate strategy (improved version)
+   * Dynamically adjusts traffic based on error rates with:
+   * - Time-windowed statistics (default: 15 minutes)
+   * - Circuit breaker for high-error backends
+   * - Cold start protection
+   * - Configurable weight integration
    */
-  private async selectByMinErrorRate(backends: BackendConfig[]): Promise<BackendConfig> {
-    // Get stats for all backends
+  private async selectByMinErrorRate(backends: BackendConfig[], modelConfig: ModelConfig): Promise<BackendConfig> {
+    // Get configuration options with defaults
+    const options = modelConfig.minErrorRateOptions || {}
+    const MIN_REQUESTS = options.minRequests ?? 20
+    const CIRCUIT_BREAKER_THRESHOLD = options.circuitBreakerThreshold ?? 0.9
+    const EPSILON = options.epsilon ?? 0.001
+    const TIME_WINDOW_MINUTES = options.timeWindowMinutes ?? 15
+
+    // Get time-windowed stats for all backends
     const backendStatsPromises = backends.map(async backend => {
-      const stats = await statsTracker.getStats(backend.id)
+      const stats = await statsTracker.getRecentStats(backend.id, TIME_WINDOW_MINUTES)
       return {
         backend,
-        errorRate: stats ? (1 - stats.successRate) : 1, // Default to 100% error rate if no stats
+        errorRate: stats ? (1 - stats.successRate) : 0, // Default to 0% error rate for cold start
         totalRequests: stats?.totalRequests ?? 0
       }
     })
 
     const backendStats = await Promise.all(backendStatsPromises)
 
-    // Calculate inverse error rate weights
-    // Lower error rate = higher weight
-    // Add small epsilon to avoid division by zero
-    const epsilon = 0.01
-    const weightsWithErrorRate = backendStats.map(stat => {
-      // If backend has very few requests (< 5), treat it as having average error rate
-      // This gives new backends a chance
-      if (stat.totalRequests < 5) {
-        const avgErrorRate = backendStats.reduce((sum, s) => sum + s.errorRate, 0) / backendStats.length
+    // Calculate average error rate for cold start protection
+    const backendsWithData = backendStats.filter(s => s.totalRequests >= MIN_REQUESTS)
+    const avgErrorRate = backendsWithData.length > 0
+      ? backendsWithData.reduce((sum, s) => sum + s.errorRate, 0) / backendsWithData.length
+      : 0.1 // Default to 10% if no backends have sufficient data
+
+    // Filter out backends that should be circuit broken and calculate weights
+    const weightsWithErrorRate = backendStats
+      .filter(stat => {
+        // Circuit breaker: exclude backends with high error rate and sufficient data
+        if (stat.totalRequests >= MIN_REQUESTS && stat.errorRate > CIRCUIT_BREAKER_THRESHOLD) {
+          console.log(`Circuit breaker triggered for backend ${stat.backend.id}: error rate ${(stat.errorRate * 100).toFixed(1)}% (threshold: ${(CIRCUIT_BREAKER_THRESHOLD * 100).toFixed(1)}%)`)
+          return false
+        }
+        return true
+      })
+      .map(stat => {
+        let effectiveErrorRate: number
+
+        // Cold start protection: use average error rate for backends with insufficient data
+        if (stat.totalRequests < MIN_REQUESTS) {
+          effectiveErrorRate = avgErrorRate
+        } else {
+          effectiveErrorRate = stat.errorRate
+        }
+
+        // Calculate weight: combine configured weight with inverse error rate
+        // weight = (configured_weight) / (error_rate + epsilon)
+        const configuredWeight = stat.backend.weight > 0 ? stat.backend.weight : 1
+        const weight = configuredWeight / (effectiveErrorRate + EPSILON)
+
         return {
           backend: stat.backend,
-          weight: 1 / (avgErrorRate + epsilon)
+          weight,
+          errorRate: stat.errorRate,
+          totalRequests: stat.totalRequests
         }
-      }
+      })
 
-      // For backends with sufficient data, use actual error rate
-      return {
-        backend: stat.backend,
-        weight: 1 / (stat.errorRate + epsilon)
-      }
-    })
+    // If all backends are circuit broken, fall back to weighted strategy
+    if (weightsWithErrorRate.length === 0) {
+      console.warn('All backends circuit broken, falling back to weighted strategy')
+      return this.selectByWeight(backends)
+    }
 
     // Calculate total weight
     const totalWeight = weightsWithErrorRate.reduce((sum, item) => sum + item.weight, 0)

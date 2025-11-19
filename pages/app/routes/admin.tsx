@@ -20,7 +20,7 @@ import {
 } from "../components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { useAdminApi, type BackendConfig, type ModelConfig, type LoadBalancingStrategy, type StatsDataPoint, type ApiKey } from "~/apis";
+import { useAdminApi, type BackendConfig, type ModelConfig, type LoadBalancingStrategy, type StatsDataPoint, type ApiKey, type MinErrorRateOptions } from "~/apis";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "../components/ui/chart";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
@@ -363,22 +363,32 @@ function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
 
 function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (v: boolean) => void; onAdded: () => void; }) {
   const api = useAdminApi();
-  const [form, setForm] = React.useState<{ model: string; loadBalancingStrategy: LoadBalancingStrategy }>({
+  const [form, setForm] = React.useState<{ model: string; loadBalancingStrategy: LoadBalancingStrategy; minErrorRateOptions?: MinErrorRateOptions }>({
     model: "",
     loadBalancingStrategy: "weighted"
+  });
+  const [minErrorRateOpts, setMinErrorRateOpts] = React.useState<MinErrorRateOptions>({
+    minRequests: 20,
+    circuitBreakerThreshold: 0.9,
+    epsilon: 0.001,
+    timeWindowMinutes: 15
   });
 
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
-    await api.addModel(form);
+    await api.addModel({
+      ...form,
+      minErrorRateOptions: form.loadBalancingStrategy === 'min-error-rate' ? minErrorRateOpts : undefined
+    });
     setForm({ model: "", loadBalancingStrategy: "weighted" });
+    setMinErrorRateOpts({ minRequests: 20, circuitBreakerThreshold: 0.9, epsilon: 0.001, timeWindowMinutes: 15 });
     onOpenChange(false);
     onAdded();
-  }, [api, form, onOpenChange, onAdded]);
+  }, [api, form, minErrorRateOpts, onOpenChange, onAdded]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Add Model</DialogTitle>
         </DialogHeader>
@@ -414,6 +424,61 @@ function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean; onOpen
               {form.loadBalancingStrategy === 'min-error-rate' && '根据错误率动态调整流量分配'}
             </p>
           </div>
+
+          {/* Min Error Rate Options - Only show when strategy is min-error-rate */}
+          {form.loadBalancingStrategy === 'min-error-rate' && (
+            <div className="border rounded-lg p-4 space-y-3 bg-gray-50">
+              <h4 className="text-sm font-medium text-gray-700">最小错误率策略配置</h4>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm mb-1">最小请求数 (minRequests)</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={minErrorRateOpts.minRequests}
+                    onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, minRequests: Number(e.target.value) })}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">默认: 20 - 达到此请求数后才使用实际错误率</p>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">熔断阈值 (circuitBreakerThreshold)</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={minErrorRateOpts.circuitBreakerThreshold}
+                    onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, circuitBreakerThreshold: Number(e.target.value) })}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">默认: 0.9 (90%) - 错误率超过此值触发熔断</p>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Epsilon 值</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.0001}
+                    value={minErrorRateOpts.epsilon}
+                    onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, epsilon: Number(e.target.value) })}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">默认: 0.001 - 避免除零错误的小值</p>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">时间窗口 (分钟)</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={minErrorRateOpts.timeWindowMinutes}
+                    onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, timeWindowMinutes: Number(e.target.value) })}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">默认: 15 - 计算错误率的时间窗口</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
@@ -436,25 +501,41 @@ function EditModelDialog({ open, onOpenChange, model, onSaved }: {
 }) {
   const api = useAdminApi();
   const [strategy, setStrategy] = React.useState<LoadBalancingStrategy>("weighted");
+  const [minErrorRateOpts, setMinErrorRateOpts] = React.useState<MinErrorRateOptions>({
+    minRequests: 20,
+    circuitBreakerThreshold: 0.9,
+    epsilon: 0.001,
+    timeWindowMinutes: 15
+  });
 
   React.useEffect(() => {
     if (model) {
       setStrategy(model.loadBalancingStrategy);
+      // Load existing options or use defaults
+      setMinErrorRateOpts({
+        minRequests: model.minErrorRateOptions?.minRequests ?? 20,
+        circuitBreakerThreshold: model.minErrorRateOptions?.circuitBreakerThreshold ?? 0.9,
+        epsilon: model.minErrorRateOptions?.epsilon ?? 0.001,
+        timeWindowMinutes: model.minErrorRateOptions?.timeWindowMinutes ?? 15
+      });
     }
   }, [model]);
 
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!model) return;
-    await api.updateModel(model.model, { loadBalancingStrategy: strategy });
+    await api.updateModel(model.model, {
+      loadBalancingStrategy: strategy,
+      minErrorRateOptions: strategy === 'min-error-rate' ? minErrorRateOpts : undefined
+    });
     onSaved();
-  }, [api, model, strategy, onSaved]);
+  }, [api, model, strategy, minErrorRateOpts, onSaved]);
 
   if (!model) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Model: {model.model}</DialogTitle>
         </DialogHeader>
@@ -483,6 +564,61 @@ function EditModelDialog({ open, onOpenChange, model, onSaved }: {
               {strategy === 'min-error-rate' && '根据错误率动态调整流量分配'}
             </p>
           </div>
+
+          {/* Min Error Rate Options - Only show when strategy is min-error-rate */}
+          {strategy === 'min-error-rate' && (
+            <div className="border rounded-lg p-4 space-y-3 bg-gray-50">
+              <h4 className="text-sm font-medium text-gray-700">最小错误率策略配置</h4>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm mb-1">最小请求数</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={minErrorRateOpts.minRequests}
+                    onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, minRequests: Number(e.target.value) })}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">默认: 20 - 达到此请求数后才使用实际错误率</p>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">熔断阈值</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={minErrorRateOpts.circuitBreakerThreshold}
+                    onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, circuitBreakerThreshold: Number(e.target.value) })}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">默认: 0.9 (90%) - 错误率超过此值触发熔断</p>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Epsilon 值</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.0001}
+                    value={minErrorRateOpts.epsilon}
+                    onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, epsilon: Number(e.target.value) })}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">默认: 0.001 - 避免除零错误的小值</p>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">时间窗口 (分钟)</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={minErrorRateOpts.timeWindowMinutes}
+                    onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, timeWindowMinutes: Number(e.target.value) })}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">默认: 15 - 计算错误率的时间窗口</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel

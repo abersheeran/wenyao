@@ -11,11 +11,24 @@ export interface BackendConfig {
   model?: string // Optional: Override the model name when forwarding to this backend
 }
 
+// Load balancing strategy options for min-error-rate
+export interface MinErrorRateOptions {
+  // Minimum number of requests before using actual error rate (default: 20)
+  minRequests?: number
+  // Error rate threshold for circuit breaking (default: 0.9, i.e., 90%)
+  circuitBreakerThreshold?: number
+  // Epsilon value to avoid division by zero (default: 0.001)
+  epsilon?: number
+  // Time window in minutes for calculating error rates (default: 15)
+  timeWindowMinutes?: number
+}
+
 // Model configuration - primary structure with model as unique key
 export interface ModelConfig {
   model: string // Primary key - the model name (e.g., "gpt-4", "claude-3-sonnet")
   backends: BackendConfig[] // Array of backend configurations for this model
   loadBalancingStrategy: LoadBalancingStrategy // Strategy for selecting backends
+  minErrorRateOptions?: MinErrorRateOptions // Options for min-error-rate strategy
 }
 
 // Statistics for each backend

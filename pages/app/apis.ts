@@ -9,10 +9,18 @@ export type BackendConfig = {
   model?: string; // Optional: Override the model name when forwarding to this backend
 };
 
+export type MinErrorRateOptions = {
+  minRequests?: number;
+  circuitBreakerThreshold?: number;
+  epsilon?: number;
+  timeWindowMinutes?: number;
+};
+
 export type ModelConfig = {
   model: string;
   backends: BackendConfig[];
   loadBalancingStrategy: LoadBalancingStrategy;
+  minErrorRateOptions?: MinErrorRateOptions;
 };
 
 export type BackendStats = {
@@ -111,7 +119,7 @@ export function useAdminApi() {
       const data = await res.json();
       return data.model;
     },
-    async updateModel(model: string, updates: { loadBalancingStrategy?: LoadBalancingStrategy; backends?: BackendConfig[] }): Promise<ModelConfig> {
+    async updateModel(model: string, updates: { loadBalancingStrategy?: LoadBalancingStrategy; backends?: BackendConfig[]; minErrorRateOptions?: MinErrorRateOptions }): Promise<ModelConfig> {
       const res = await fetch(`${base}/models/${encodeURIComponent(model)}`, {
         method: "PUT",
         headers: createAuthHeaders({ "Content-Type": "application/json" }),

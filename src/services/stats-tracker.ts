@@ -372,6 +372,99 @@ export class StatsTracker {
       return new Map()
     }
   }
+
+  /**
+   * Get time-windowed stats for a specific backend
+   * This is preferred over cumulative stats for load balancing decisions
+   * @param backendId - Backend ID to get stats for
+   * @param windowMinutes - Time window in minutes (default: 15)
+   * @returns Stats aggregated over the time window, or undefined if insufficient data
+   */
+  async getRecentStats(backendId: string, windowMinutes: number = 15): Promise<BackendStats | undefined> {
+    // Try to get from MongoDB historical data if available
+    if (mongoDBService.isConnected()) {
+      try {
+        const startTime = new Date(Date.now() - windowMinutes * 60 * 1000)
+        const dataPoints = await this.getHistoricalStats(backendId, startTime)
+
+        if (dataPoints.length === 0) {
+          // No historical data, fall back to current stats
+          return await this.getStats(backendId)
+        }
+
+        // Aggregate data points
+        const totalRequests = dataPoints.reduce((sum, p) => sum + p.totalRequests, 0)
+        const successfulRequests = dataPoints.reduce((sum, p) => sum + p.successfulRequests, 0)
+        const failedRequests = dataPoints.reduce((sum, p) => sum + p.failedRequests, 0)
+
+        // Calculate weighted average TTFT
+        let streamingTtftSum = 0
+        let streamingTtftCount = 0
+        let nonStreamingTtftSum = 0
+        let nonStreamingTtftCount = 0
+
+        for (const point of dataPoints) {
+          if (point.averageStreamingTTFT > 0) {
+            streamingTtftSum += point.averageStreamingTTFT * point.requestsInPeriod
+            streamingTtftCount += point.requestsInPeriod
+          }
+          if (point.averageNonStreamingTTFT > 0) {
+            nonStreamingTtftSum += point.averageNonStreamingTTFT * point.requestsInPeriod
+            nonStreamingTtftCount += point.requestsInPeriod
+          }
+        }
+
+        const averageStreamingTTFT = streamingTtftCount > 0 ? streamingTtftSum / streamingTtftCount : 0
+        const averageNonStreamingTTFT = nonStreamingTtftCount > 0 ? nonStreamingTtftSum / nonStreamingTtftCount : 0
+
+        if (totalRequests === 0) {
+          return undefined
+        }
+
+        return {
+          backendId,
+          totalRequests,
+          successfulRequests,
+          failedRequests,
+          successRate: successfulRequests / totalRequests,
+          averageStreamingTTFT,
+          averageNonStreamingTTFT,
+          ttftSamples: []
+        }
+      } catch (error) {
+        console.error(`Error fetching recent stats for backend ${backendId}:`, error)
+        // Fall back to current stats
+      }
+    }
+
+    // Fallback: use cumulative stats if MongoDB not available
+    return await this.getStats(backendId)
+  }
+
+  /**
+   * Get time-windowed stats for all backends
+   * @param windowMinutes - Time window in minutes (default: 15)
+   * @returns Map of backend ID to stats
+   */
+  async getAllRecentStats(windowMinutes: number = 15): Promise<Map<string, BackendStats>> {
+    const result = new Map<string, BackendStats>()
+
+    // Get all backend IDs from current stats
+    const allStats = await this.getAllStats()
+    const backendIds = allStats.map(s => s.backendId)
+
+    // Fetch recent stats for each backend
+    await Promise.all(
+      backendIds.map(async (backendId) => {
+        const stats = await this.getRecentStats(backendId, windowMinutes)
+        if (stats) {
+          result.set(backendId, stats)
+        }
+      })
+    )
+
+    return result
+  }
 }
 
 // Singleton instance
