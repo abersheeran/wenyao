@@ -9,7 +9,8 @@ export const backendConfigSchema = z.object({
   url: z.url('Invalid URL format'),
   apiKey: z.string().min(1, 'API key is required'),
   weight: z.number().nonnegative('Weight must be non-negative').default(1),
-  enabled: z.boolean().default(true)
+  enabled: z.boolean().default(true),
+  model: z.string().min(1, 'Model name cannot be empty').optional()
 })
 
 // Schema for creating a new model configuration
@@ -36,7 +37,8 @@ export const updateBackendInModelSchema = z.object({
   url: z.url('Invalid URL format').optional(),
   apiKey: z.string().min(1, 'API key cannot be empty').optional(),
   weight: z.number().nonnegative('Weight must be non-negative').optional(),
-  enabled: z.boolean().optional()
+  enabled: z.boolean().optional(),
+  model: z.string().min(1, 'Model name cannot be empty').optional()
 }).refine(
   (data) => Object.keys(data).length > 0,
   { message: 'At least one field must be provided for update' }

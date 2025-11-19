@@ -262,6 +262,7 @@ function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
                             <TableRow>
                               <TableHead>ID</TableHead>
                               <TableHead>URL</TableHead>
+                              <TableHead>Model</TableHead>
                               <TableHead>Weight</TableHead>
                               <TableHead>Traffic Ratio</TableHead>
                               <TableHead>Enabled</TableHead>
@@ -273,6 +274,13 @@ function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
                               <TableRow key={backend.id}>
                                 <TableCell className="font-mono">{backend.id}</TableCell>
                                 <TableCell className="truncate max-w-[300px]" title={backend.url}>{backend.url}</TableCell>
+                                <TableCell className="font-mono text-sm">
+                                  {backend.model ? (
+                                    <span className="text-blue-600" title="转发时使用此模型名">{backend.model}</span>
+                                  ) : (
+                                    <span className="text-gray-400" title="使用客户端请求的模型名">默认</span>
+                                  )}
+                                </TableCell>
                                 <TableCell>{backend.weight}</TableCell>
                                 <TableCell>{((backend as any).trafficRatio * 100).toFixed(1)}%</TableCell>
                                 <TableCell>
@@ -501,14 +509,15 @@ function AddBackendDialog({ open, onOpenChange, model, onAdded }: {
     url: "",
     apiKey: "",
     weight: 1,
-    enabled: true
+    enabled: true,
+    model: undefined
   });
 
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!model) return;
     await api.addBackend(model, form);
-    setForm({ id: "", url: "", apiKey: "", weight: 1, enabled: true });
+    setForm({ id: "", url: "", apiKey: "", weight: 1, enabled: true, model: undefined });
     onOpenChange(false);
     onAdded();
   }, [api, model, form, onOpenChange, onAdded]);
@@ -527,14 +536,31 @@ function AddBackendDialog({ open, onOpenChange, model, onAdded }: {
             <label className="block text-sm mb-1">Backend ID</label>
             <Input required value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} />
           </div>
-          <div>
-            <label className="block text-sm mb-1">URL</label>
-            <Input required value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
+
+          {/* Backend Configuration Section */}
+          <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+            <h4 className="text-sm font-medium text-gray-700">Backend 配置</h4>
+            <div>
+              <label className="block text-sm mb-1">URL</label>
+              <Input required value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://api.example.com" />
+            </div>
+            <div>
+              <label className="block text-sm mb-1">API Key</label>
+              <Input required value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder="sk-..." />
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Model (可选)</label>
+              <Input
+                value={form.model || ""}
+                onChange={(e) => setForm({ ...form, model: e.target.value || undefined })}
+                placeholder="留空使用客户端请求的模型名"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                指定转发到此 backend 时使用的模型名称。留空则使用客户端请求的原始模型名。
+              </p>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm mb-1">API Key</label>
-            <Input required value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
-          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm mb-1">Weight</label>
@@ -591,7 +617,8 @@ function EditBackendDialog({ open, onOpenChange, model, backend, onSaved }: {
       url: form.url,
       apiKey: form.apiKey,
       weight: form.weight,
-      enabled: form.enabled
+      enabled: form.enabled,
+      model: form.model
     });
     onSaved();
   }, [api, model, form, onSaved]);
@@ -614,14 +641,31 @@ function EditBackendDialog({ open, onOpenChange, model, backend, onSaved }: {
             <label className="block text-sm mb-1">Model</label>
             <Input value={model} disabled readOnly />
           </div>
-          <div>
-            <label className="block text-sm mb-1">URL</label>
-            <Input required value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
+
+          {/* Backend Configuration Section */}
+          <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+            <h4 className="text-sm font-medium text-gray-700">Backend 配置</h4>
+            <div>
+              <label className="block text-sm mb-1">URL</label>
+              <Input required value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://api.example.com" />
+            </div>
+            <div>
+              <label className="block text-sm mb-1">API Key</label>
+              <Input required value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder="sk-..." />
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Model (可选)</label>
+              <Input
+                value={form.model || ""}
+                onChange={(e) => setForm({ ...form, model: e.target.value || undefined })}
+                placeholder="留空使用客户端请求的模型名"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                指定转发到此 backend 时使用的模型名称。留空则使用客户端请求的原始模型名。
+              </p>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm mb-1">API Key</label>
-            <Input required value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
-          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm mb-1">Weight</label>

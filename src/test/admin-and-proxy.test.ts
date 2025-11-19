@@ -651,3 +651,116 @@ describe('Proxy API - API Key Authentication', () => {
   })
 })
 
+describe('Backend Model Remapping', () => {
+  const app = new Hono()
+  app.use('/admin/*', adminAuth)
+  app.route('/admin', admin)
+
+  beforeAll(() => {
+    process.env.ADMIN_APIKEYS = TEST_API_KEY
+  })
+
+  afterAll(() => {
+    delete process.env.ADMIN_APIKEYS
+  })
+
+  beforeEach(async () => {
+    await clearAllModels()
+    statsTracker.resetAllStats()
+  })
+
+  it('Backend with model field can be created and retrieved', async () => {
+    const backend: BackendConfig = {
+      id: 'b1',
+      url: 'https://api.test',
+      apiKey: 'k1',
+      weight: 1,
+      enabled: true,
+      model: 'gpt-4-turbo'
+    }
+    const body: ModelConfig = {
+      model: 'gpt-4',
+      backends: [backend],
+      loadBalancingStrategy: 'weighted'
+    }
+
+    // Create model with backend that has model field
+    const createRes = await app.fetch(req('/admin/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }))
+    const createData = await createRes.json()
+    expect(createRes.status).toBe(201)
+    expect(createData.model.backends[0].model).toBe('gpt-4-turbo')
+
+    // Get the model and verify model field is preserved
+    const getRes = await app.fetch(req('/admin/models/gpt-4'))
+    const getData = await getRes.json()
+    expect(getRes.status).toBe(200)
+    expect(getData.model.backends[0].model).toBe('gpt-4-turbo')
+  })
+
+  it('Backend model field can be updated', async () => {
+    // Create initial backend without model field
+    await configManager.addModelConfig({
+      model: 'gpt-4',
+      backends: [{
+        id: 'b1',
+        url: 'https://a.test',
+        apiKey: 'k1',
+        weight: 1,
+        enabled: true
+      }],
+      loadBalancingStrategy: 'weighted'
+    })
+
+    // Update backend to add model field
+    const updateRes = await app.fetch(req('/admin/models/gpt-4/backends/b1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-4-turbo' })
+    }))
+    const updateData = await updateRes.json()
+    expect(updateRes.status).toBe(200)
+    expect(updateData.model.backends[0].model).toBe('gpt-4-turbo')
+
+    // Verify the update persisted
+    const getRes = await app.fetch(req('/admin/models/gpt-4/backends/b1'))
+    const getData = await getRes.json()
+    expect(getRes.status).toBe(200)
+    expect(getData.backend.model).toBe('gpt-4-turbo')
+  })
+
+  it('Backend without model field works as before', async () => {
+    const backend: BackendConfig = {
+      id: 'b1',
+      url: 'https://api.test',
+      apiKey: 'k1',
+      weight: 1,
+      enabled: true
+    }
+    const body: ModelConfig = {
+      model: 'gpt-4',
+      backends: [backend],
+      loadBalancingStrategy: 'weighted'
+    }
+
+    // Create backend without model field
+    const createRes = await app.fetch(req('/admin/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }))
+    const createData = await createRes.json()
+    expect(createRes.status).toBe(201)
+    expect(createData.model.backends[0].model).toBeUndefined()
+
+    // Verify it's still undefined
+    const getRes = await app.fetch(req('/admin/models/gpt-4'))
+    const getData = await getRes.json()
+    expect(getRes.status).toBe(200)
+    expect(getData.model.backends[0].model).toBeUndefined()
+  })
+})
+

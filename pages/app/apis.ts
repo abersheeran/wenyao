@@ -6,6 +6,7 @@ export type BackendConfig = {
   apiKey: string;
   weight: number;
   enabled: boolean;
+  model?: string; // Optional: Override the model name when forwarding to this backend
 };
 
 export type ModelConfig = {

@@ -57,10 +57,10 @@ proxyApp.post('/chat/completions', async (c) => {
       }, 503)
     }
 
-    // Keep the original model in the request (no longer replacing it)
-    // The backend will receive the exact model name from the client
+    // Use backend-specific model if configured, otherwise use the client's model
     const modifiedRequest = {
-      ...requestBody
+      ...requestBody,
+      model: backend.model || requestBody.model
     }
 
     // Record request start time and increment active requests

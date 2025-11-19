@@ -8,6 +8,7 @@ export interface BackendConfig {
   apiKey: string
   weight: number
   enabled: boolean
+  model?: string // Optional: Override the model name when forwarding to this backend
 }
 
 // Model configuration - primary structure with model as unique key
