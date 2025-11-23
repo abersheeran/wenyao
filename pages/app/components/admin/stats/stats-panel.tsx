@@ -3,12 +3,14 @@ import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
+import { Switch } from "../../ui/switch";
 import { useAdminApi, type StatsDataPoint } from "~/apis";
 import { HistoricalCharts } from "./historical-charts";
 
 export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   const [historyData, setHistoryData] = React.useState<Record<string, StatsDataPoint[]>>({});
   const [timeRange, setTimeRange] = React.useState<string>("1h"); // 1h, 6h, 24h, 7d
+  const [autoRefresh, setAutoRefresh] = React.useState<boolean>(false);
 
   const [historyState, loadHistory] = useAsyncFn(async () => {
     const now = new Date();
@@ -39,13 +41,15 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   React.useEffect(() => {
     loadHistory();
 
-    // Auto refresh every 30 seconds
-    const interval = setInterval(() => {
-      loadHistory();
-    }, 30000);
+    // Auto refresh every 30 seconds if enabled
+    if (autoRefresh) {
+      const interval = setInterval(() => {
+        loadHistory();
+      }, 30000);
 
-    return () => clearInterval(interval);
-  }, [timeRange]);
+      return () => clearInterval(interval);
+    }
+  }, [timeRange, autoRefresh]);
 
   return (
     <Card>
@@ -57,9 +61,9 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
               数据每 15 秒更新一次，显示所有实例的聚合结果
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-3">
             <Select value={timeRange} onValueChange={(v) => setTimeRange(v)}>
-              <SelectTrigger className="text-sm">
+              <SelectTrigger className="text-sm w-32">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -72,6 +76,15 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
             <Button variant="outline" onClick={loadHistory} disabled={historyState.loading}>
               刷新
             </Button>
+            <div className="flex items-center gap-2 ml-1">
+              <Switch
+                checked={autoRefresh}
+                onCheckedChange={setAutoRefresh}
+              />
+              <span className="text-xs text-muted-foreground">
+                自动刷新
+              </span>
+            </div>
           </div>
         </div>
       </CardHeader>

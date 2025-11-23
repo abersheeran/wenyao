@@ -15,16 +15,19 @@ const generateColor = (index: number, total: number): string => {
 
 export function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDataPoint[]> }) {
   // Sort backend IDs alphabetically and memoize based on actual keys change
+  const backendIdsKey = React.useMemo(() => {
+    return Object.keys(historyData).sort().join(',');
+  }, [historyData]);
+
   const backendIds = React.useMemo(() => {
-    return Object.keys(historyData).sort();
-  }, [Object.keys(historyData).sort().join(',')]);
+    return backendIdsKey.split(',').filter(id => id.length > 0);
+  }, [backendIdsKey]);
 
   const [selectedBackends, setSelectedBackends] = React.useState<Set<string>>(
     new Set(backendIds)
   );
 
   // Update selected backends only when the actual backend IDs change
-  const backendIdsKey = backendIds.join(',');
   React.useEffect(() => {
     setSelectedBackends((prev) => {
       const currentIds = new Set(backendIds);
@@ -63,7 +66,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
       colors[id] = generateColor(index, backendIds.length);
     });
     return colors;
-  }, [backendIds]);
+  }, [backendIdsKey]);
 
   const toggleBackend = (backendId: string) => {
     setSelectedBackends((prev) => {
@@ -102,7 +105,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
           timeMap.set(timeKey, { time, timestamp: point.timestamp });
         }
 
-        const entry = timeMap.get(timeKey);
+        const entry = timeMap.get(timeKey)!;
         entry[`successRate_${backendId}`] = point.successRate * 100;
         entry[`streamingTtft_${backendId}`] = point.averageStreamingTTFT || 0;
         entry[`nonStreamingTtft_${backendId}`] = point.averageNonStreamingTTFT || 0;
@@ -111,7 +114,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
     });
 
     return Array.from(timeMap.values()).sort((a, b) => a.time - b.time);
-  }, [historyData, backendIds]);
+  }, [backendIdsKey, historyData]);
 
   const formatTime = (timestamp: string | Date) => {
     const date = new Date(timestamp);
@@ -142,7 +145,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
       };
     });
     return config;
-  }, [backendIds, backendColors]);
+  }, [backendIdsKey, backendColors]);
 
   return (
     <>
@@ -231,11 +234,11 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
         </ChartContainer>
       </div>
 
-      {/* Streaming vs Non-Streaming TTFT Chart */}
+      {/* Streaming TTFT Chart */}
       <div>
         <div className="mb-4">
-          <h3 className="text-base font-medium mb-1">流式 vs 非流式 TTFT 对比</h3>
-          <p className="text-sm text-muted-foreground">分别显示流式请求和非流式请求的首 Token 响应时间 (毫秒)</p>
+          <h3 className="text-base font-medium mb-1">流式 TTFT 趋势</h3>
+          <p className="text-sm text-muted-foreground">流式请求的首 Token 响应时间 (毫秒)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <LineChart
@@ -275,6 +278,44 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
                 dot={false}
               />
             ))}
+          </LineChart>
+        </ChartContainer>
+      </div>
+
+      {/* Non-Streaming TTFT Chart */}
+      <div>
+        <div className="mb-4">
+          <h3 className="text-base font-medium mb-1">非流式 TTFT 趋势</h3>
+          <p className="text-sm text-muted-foreground">非流式请求的首 Token 响应时间 (毫秒)</p>
+        </div>
+        <ChartContainer config={chartConfig} className="h-[300px] w-full">
+          <LineChart
+            accessibilityLayer
+            data={mergedData}
+            margin={{
+              left: 12,
+              right: 12,
+              top: 12,
+            }}
+          >
+            <CartesianGrid vertical={false} />
+            <XAxis
+              dataKey="timestamp"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              tickFormatter={formatTime}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              tickFormatter={(value) => `${value}ms`}
+            />
+            <ChartTooltip
+              cursor={false}
+              content={<ChartTooltipContent indicator="dot" />}
+            />
             {visibleBackendIds.map((id) => (
               <Line
                 key={`nonStreaming_${id}`}
@@ -282,7 +323,6 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
                 type="monotone"
                 stroke={`var(--color-nonStreamingTtft_${id})`}
                 strokeWidth={2}
-                strokeDasharray="5 5"
                 dot={false}
               />
             ))}
