@@ -14,12 +14,17 @@ const generateColor = (index: number, total: number): string => {
 };
 
 export function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDataPoint[]> }) {
-  const backendIds = Object.keys(historyData);
+  // Sort backend IDs alphabetically and memoize based on actual keys change
+  const backendIds = React.useMemo(() => {
+    return Object.keys(historyData).sort();
+  }, [Object.keys(historyData).sort().join(',')]);
+
   const [selectedBackends, setSelectedBackends] = React.useState<Set<string>>(
     new Set(backendIds)
   );
 
-  // Update selected backends when backendIds change
+  // Update selected backends only when the actual backend IDs change
+  const backendIdsKey = backendIds.join(',');
   React.useEffect(() => {
     setSelectedBackends((prev) => {
       const currentIds = new Set(backendIds);
@@ -49,7 +54,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
 
       return updated;
     });
-  }, [backendIds.join(',')]);
+  }, [backendIdsKey]);
 
   // Generate distinct colors for each backend
   const backendColors = React.useMemo(() => {
