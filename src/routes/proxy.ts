@@ -63,6 +63,10 @@ proxyApp.post('/chat/completions', async (c) => {
       model: backend.model || requestBody.model
     }
 
+    const headers = { ...c.req.header() };
+    delete headers['content-length']; // Remove content-length to allow fetch to set it correctly
+    headers['Authorization'] = `Bearer ${backend.apiKey}`;
+
     // Record request start time and increment active requests
     const startTime = Date.now()
     let firstTokenTime: number | undefined
@@ -72,10 +76,7 @@ proxyApp.post('/chat/completions', async (c) => {
       // Call backend using fetch
       const response = await proxy(new URL("/v1/chat/completions", backend.url), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${backend.apiKey}`
-        },
+        headers: headers,
         body: JSON.stringify(modifiedRequest)
       })
 
