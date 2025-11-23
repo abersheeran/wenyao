@@ -1,20 +1,87 @@
 import * as React from "react";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "../../ui/chart";
-import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis, Line, LineChart } from "recharts";
 import type { StatsDataPoint } from "~/apis";
+import { Button } from "../../ui/button";
+
+// Generate a distinct color palette for any number of backends
+const generateColor = (index: number, total: number): string => {
+  // Use HSL color space for evenly distributed colors
+  const hue = (index * 360) / Math.max(total, 1);
+  const saturation = 70; // Vibrant colors
+  const lightness = 50; // Medium brightness
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+};
 
 export function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDataPoint[]> }) {
   const backendIds = Object.keys(historyData);
+  const [selectedBackends, setSelectedBackends] = React.useState<Set<string>>(
+    new Set(backendIds)
+  );
 
-  // Generate colors for each backend using CSS variables
-  // Use var(...) so they resolve to actual theme colors
-  const colorKeys = [
-    "var(--chart-1)",
-    "var(--chart-2)",
-    "var(--chart-3)",
-    "var(--chart-4)",
-    "var(--chart-5)"
-  ];
+  // Update selected backends when backendIds change
+  React.useEffect(() => {
+    setSelectedBackends((prev) => {
+      const currentIds = new Set(backendIds);
+
+      // First render - select all
+      if (prev.size === 0 && backendIds.length > 0) {
+        return currentIds;
+      }
+
+      // Keep existing selection, but remove backends that no longer exist
+      // and add new backends if they appear
+      const updated = new Set<string>();
+
+      // Keep previously selected backends that still exist
+      prev.forEach(id => {
+        if (currentIds.has(id)) {
+          updated.add(id);
+        }
+      });
+
+      // Auto-select new backends
+      backendIds.forEach(id => {
+        if (!prev.has(id)) {
+          updated.add(id);
+        }
+      });
+
+      return updated;
+    });
+  }, [backendIds.join(',')]);
+
+  // Generate distinct colors for each backend
+  const backendColors = React.useMemo(() => {
+    const colors: Record<string, string> = {};
+    backendIds.forEach((id, index) => {
+      colors[id] = generateColor(index, backendIds.length);
+    });
+    return colors;
+  }, [backendIds]);
+
+  const toggleBackend = (backendId: string) => {
+    setSelectedBackends((prev) => {
+      const next = new Set(prev);
+      if (next.has(backendId)) {
+        next.delete(backendId);
+      } else {
+        next.add(backendId);
+      }
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selectedBackends.size === backendIds.length) {
+      setSelectedBackends(new Set());
+    } else {
+      setSelectedBackends(new Set(backendIds));
+    }
+  };
+
+  // Filter backends based on selection
+  const visibleBackendIds = backendIds.filter((id) => selectedBackends.has(id));
 
   // Prepare data for charts - merge all backends into single timeline
   const mergedData = React.useMemo(() => {
@@ -49,29 +116,67 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
   const chartConfig = React.useMemo(() => {
     const config: Record<string, { label: string; color: string }> = {};
     backendIds.forEach((id) => {
-      const blue = "var(--chart-2)"; // unified blue from theme palette
+      const color = backendColors[id];
       config[`successRate_${id}`] = {
         label: id,
-        color: blue,
+        color: color,
       };
+      // For streaming, use the base color with solid line
       config[`streamingTtft_${id}`] = {
-        label: `${id} (Streaming)`,
-        color: blue,
+        label: `${id} (流式)`,
+        color: color,
       };
+      // For non-streaming, use a lighter/dashed variant
       config[`nonStreamingTtft_${id}`] = {
-        label: `${id} (Non-Streaming)`,
-        color: blue,
+        label: `${id} (非流式)`,
+        color: color,
       };
       config[`requests_${id}`] = {
         label: id,
-        color: blue,
+        color: color,
       };
     });
     return config;
-  }, [backendIds]);
+  }, [backendIds, backendColors]);
 
   return (
     <>
+      {/* Backend Filter */}
+      <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-medium">Backend 筛选器</h4>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={toggleAll}
+          >
+            {selectedBackends.size === backendIds.length ? '取消全选' : '全选'}
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {backendIds.map((id) => (
+            <button
+              key={id}
+              onClick={() => toggleBackend(id)}
+              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                selectedBackends.has(id)
+                  ? 'bg-white border-2 shadow-sm'
+                  : 'bg-gray-200 border-2 border-transparent opacity-50'
+              }`}
+              style={{
+                borderColor: selectedBackends.has(id) ? backendColors[id] : 'transparent',
+              }}
+            >
+              <span
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: backendColors[id] }}
+              />
+              <span>{id}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Success Rate Chart */}
       <div>
         <div className="mb-4">
@@ -79,7 +184,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
           <p className="text-sm text-muted-foreground">各 Backend 请求成功率变化 (%)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
-          <AreaChart
+          <LineChart
             accessibilityLayer
             data={mergedData}
             margin={{
@@ -107,20 +212,17 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {backendIds.map((id, index) => (
-              <Area
+            {visibleBackendIds.map((id) => (
+              <Line
                 key={id}
                 dataKey={`successRate_${id}`}
-                type="linear"
-                // Use the per-series CSS variable generated by ChartContainer
-                fill={`var(--color-successRate_${id})`}
-                fillOpacity={0.25}
+                type="monotone"
                 stroke={`var(--color-successRate_${id})`}
                 strokeWidth={2}
-                stackId="a"
+                dot={false}
               />
             ))}
-          </AreaChart>
+          </LineChart>
         </ChartContainer>
       </div>
 
@@ -131,7 +233,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
           <p className="text-sm text-muted-foreground">分别显示流式请求和非流式请求的首 Token 响应时间 (毫秒)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
-          <AreaChart
+          <LineChart
             accessibilityLayer
             data={mergedData}
             margin={{
@@ -158,27 +260,28 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {backendIds.map((id) => (
-              <Area key={`streaming_${id}`}
+            {visibleBackendIds.map((id) => (
+              <Line
+                key={`streaming_${id}`}
                 dataKey={`streamingTtft_${id}`}
-                type="linear"
-                fill={`var(--color-streamingTtft_${id})`}
-                fillOpacity={0.15}
+                type="monotone"
                 stroke={`var(--color-streamingTtft_${id})`}
                 strokeWidth={2}
+                dot={false}
               />
             ))}
-            {backendIds.map((id) => (
-              <Area key={`nonStreaming_${id}`}
+            {visibleBackendIds.map((id) => (
+              <Line
+                key={`nonStreaming_${id}`}
                 dataKey={`nonStreamingTtft_${id}`}
-                type="linear"
-                fill={`var(--color-nonStreamingTtft_${id})`}
-                fillOpacity={0.15}
+                type="monotone"
                 stroke={`var(--color-nonStreamingTtft_${id})`}
                 strokeWidth={2}
+                strokeDasharray="5 5"
+                dot={false}
               />
             ))}
-          </AreaChart>
+          </LineChart>
         </ChartContainer>
       </div>
 
@@ -215,7 +318,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {backendIds.map((id, index) => (
+            {visibleBackendIds.map((id) => (
               <Area
                 key={id}
                 dataKey={`requests_${id}`}
