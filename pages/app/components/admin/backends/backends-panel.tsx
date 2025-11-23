@@ -1,0 +1,259 @@
+import * as React from "react";
+import useAsyncFn from 'react-use/lib/useAsyncFn';
+import { Button } from "../../ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "../../ui/table";
+import { Switch } from "../../ui/switch";
+import { useAdminApi, type BackendConfig, type ModelConfig, type LoadBalancingStrategy } from "~/apis";
+import { AddModelDialog } from "./add-model-dialog";
+import { EditModelDialog } from "./edit-model-dialog";
+import { AddBackendDialog } from "./add-backend-dialog";
+import { EditBackendDialog } from "./edit-backend-dialog";
+
+export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
+  const [models, setModels] = React.useState<(ModelConfig & { backends: (BackendConfig & { trafficRatio: number })[] })[]>([]);
+  const [expandedModels, setExpandedModels] = React.useState<Set<string>>(new Set());
+  const [addModelOpen, setAddModelOpen] = React.useState(false);
+  const [editingModel, setEditingModel] = React.useState<ModelConfig | null>(null);
+  const [addingBackendFor, setAddingBackendFor] = React.useState<string | null>(null);
+  const [editingBackend, setEditingBackend] = React.useState<{ model: string; backend: BackendConfig } | null>(null);
+
+  const [listState, load] = useAsyncFn(async () => {
+    try {
+      const data = await api.listModels();
+      setModels(data);
+      // 默认展开所有模型
+      setExpandedModels(new Set(data.map(m => m.model)));
+      return data;
+    } catch (error: any) {
+      // 如果是鉴权错误,清除本地存储的密钥并刷新页面
+      if (error?.message?.includes('Unauthorized') || error?.message?.includes('401')) {
+        localStorage.removeItem('adminApiKey');
+        window.location.reload();
+      }
+      throw error;
+    }
+  }, [api]);
+
+  const [deleteModelState, deleteModel] = useAsyncFn(
+    async (model: string) => {
+      await api.deleteModel(model);
+      await load();
+    },
+    [api, load]
+  );
+
+  const [updateEnabledState, updateEnabled] = useAsyncFn(
+    async (model: string, backendId: string, enabled: boolean) => {
+      await api.updateBackend(model, backendId, { enabled });
+      await load();
+    },
+    [api, load]
+  );
+
+  const [deleteBackendState, deleteBackend] = useAsyncFn(
+    async (model: string, backendId: string) => {
+      await api.deleteBackend(model, backendId);
+      await load();
+    },
+    [api, load]
+  );
+
+  React.useEffect(() => {
+    load();
+  }, []);
+
+  const toggleModel = (model: string) => {
+    const newExpanded = new Set(expandedModels);
+    if (newExpanded.has(model)) {
+      newExpanded.delete(model);
+    } else {
+      newExpanded.add(model);
+    }
+    setExpandedModels(newExpanded);
+  };
+
+  const getStrategyLabel = (strategy: LoadBalancingStrategy) => {
+    const labels = {
+      'weighted': { text: '权重策略', color: 'bg-blue-100 text-blue-800' },
+      'lowest-ttft': { text: '最低 TTFT', color: 'bg-green-100 text-green-800' },
+      'min-error-rate': { text: '最小错误率', color: 'bg-purple-100 text-purple-800' }
+    };
+    return labels[strategy] || { text: strategy, color: 'bg-gray-100 text-gray-800' };
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex items-center justify-between">
+        <CardTitle>Models & Backends</CardTitle>
+        <Button onClick={() => setAddModelOpen(true)}>Add Model</Button>
+      </CardHeader>
+      <CardContent>
+        {(listState.error || deleteModelState.error || updateEnabledState.error || deleteBackendState.error) && (
+          <p className="text-sm text-red-600 mb-2">
+            {(listState.error || deleteModelState.error || updateEnabledState.error || deleteBackendState.error)?.message}
+          </p>
+        )}
+        {listState.loading ? (
+          <p className="text-sm text-gray-500">Loading...</p>
+        ) : models.length === 0 ? (
+          <p className="text-sm text-gray-500">No models configured.</p>
+        ) : (
+          <div className="space-y-4">
+            {models.map((modelConfig) => {
+              const isExpanded = expandedModels.has(modelConfig.model);
+              const strategyLabel = getStrategyLabel(modelConfig.loadBalancingStrategy);
+
+              return (
+                <div key={modelConfig.model} className="border rounded-lg">
+                  {/* Model header */}
+                  <div className="flex items-center justify-between p-4 bg-gray-50 hover:bg-gray-100 cursor-pointer" onClick={() => toggleModel(modelConfig.model)}>
+                    <div className="flex items-center gap-3">
+                      <span className="text-lg font-medium">
+                        {isExpanded ? '▼' : '▶'} {modelConfig.model}
+                      </span>
+                      <span className={`px-2 py-1 rounded text-xs font-medium ${strategyLabel.color}`}>
+                        {strategyLabel.text}
+                      </span>
+                      <span className="text-sm text-gray-600">
+                        ({modelConfig.backends.length} backend{modelConfig.backends.length !== 1 ? 's' : ''})
+                      </span>
+                    </div>
+                    <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setEditingModel(modelConfig)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => {
+                          if (confirm(`Delete model ${modelConfig.model} and all its backends?`)) {
+                            deleteModel(modelConfig.model);
+                          }
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Backends table (expanded) */}
+                  {isExpanded && (
+                    <div className="p-4">
+                      {modelConfig.backends.length === 0 ? (
+                        <p className="text-sm text-gray-500 mb-3">No backends configured for this model.</p>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>ID</TableHead>
+                              <TableHead>URL</TableHead>
+                              <TableHead>Model</TableHead>
+                              <TableHead>Weight</TableHead>
+                              <TableHead>Traffic Ratio</TableHead>
+                              <TableHead>Enabled</TableHead>
+                              <TableHead>Actions</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {modelConfig.backends.map((backend) => (
+                              <TableRow key={backend.id}>
+                                <TableCell className="font-mono">{backend.id}</TableCell>
+                                <TableCell className="truncate max-w-[300px]" title={backend.url}>{backend.url}</TableCell>
+                                <TableCell className="font-mono text-sm">
+                                  {backend.model ? (
+                                    <span className="text-blue-600" title="转发时使用此模型名">{backend.model}</span>
+                                  ) : (
+                                    <span className="text-gray-400" title="使用客户端请求的模型名">默认</span>
+                                  )}
+                                </TableCell>
+                                <TableCell>{backend.weight}</TableCell>
+                                <TableCell>{((backend as any).trafficRatio * 100).toFixed(1)}%</TableCell>
+                                <TableCell>
+                                  <Switch
+                                    checked={backend.enabled}
+                                    onCheckedChange={(checked) => updateEnabled(modelConfig.model, backend.id, checked)}
+                                  />
+                                </TableCell>
+                                <TableCell className="space-x-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setEditingBackend({ model: modelConfig.model, backend })}
+                                  >
+                                    Edit
+                                  </Button>
+                                  <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    onClick={() => {
+                                      if (confirm(`Delete backend ${backend.id}?`)) {
+                                        deleteBackend(modelConfig.model, backend.id);
+                                      }
+                                    }}
+                                  >
+                                    Delete
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                      <div className="mt-3">
+                        <Button variant="outline" size="sm" onClick={() => setAddingBackendFor(modelConfig.model)}>
+                          + Add Backend to {modelConfig.model}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+
+      <AddModelDialog open={addModelOpen} onOpenChange={setAddModelOpen} onAdded={load} />
+      <EditModelDialog
+        open={!!editingModel}
+        model={editingModel}
+        onOpenChange={(v) => !v && setEditingModel(null)}
+        onSaved={() => {
+          setEditingModel(null);
+          load();
+        }}
+      />
+      <AddBackendDialog
+        open={!!addingBackendFor}
+        model={addingBackendFor}
+        onOpenChange={(v) => !v && setAddingBackendFor(null)}
+        onAdded={() => {
+          setAddingBackendFor(null);
+          load();
+        }}
+      />
+      <EditBackendDialog
+        open={!!editingBackend}
+        model={editingBackend?.model ?? null}
+        backend={editingBackend?.backend ?? null}
+        onOpenChange={(v) => !v && setEditingBackend(null)}
+        onSaved={() => {
+          setEditingBackend(null);
+          load();
+        }}
+      />
+    </Card>
+  );
+}
