@@ -103,6 +103,7 @@ export class LoadBalancer {
    * Selects the backend with the lowest average TTFT
    * Uses stream-specific TTFT based on isStream parameter (undefined treated as non-streaming)
    * Uses time-windowed statistics (15 minutes) for more responsive selection
+   * Includes cold start protection: backends without data use average TTFT of other backends
    */
   private async selectByLowestTTFT(backends: BackendConfig[], isStream?: boolean): Promise<BackendConfig> {
     // Treat undefined isStream as false (non-streaming)
@@ -112,27 +113,45 @@ export class LoadBalancer {
     const backendStatsPromises = backends.map(async backend => {
       const stats = await statsTracker.getRecentStats(backend.id, 15)
 
-      // Choose TTFT metric based on stream type
-      let averageTTFT: number
-      if (stats) {
-        averageTTFT = useStreaming ? stats.averageStreamingTTFT : stats.averageNonStreamingTTFT
-      } else {
-        averageTTFT = 0
-      }
-
       return {
         backend,
-        averageTTFT
+        stats,
+        hasData: stats !== null
       }
     })
 
     const backendStats = await Promise.all(backendStatsPromises)
 
+    // Calculate average TTFT for cold start protection
+    const backendsWithData = backendStats.filter(s => s.hasData && s.stats)
+    const avgTTFT = backendsWithData.length > 0
+      ? backendsWithData.reduce((sum, s) => {
+          const ttft = useStreaming ? s.stats!.averageStreamingTTFT : s.stats!.averageNonStreamingTTFT
+          return sum + ttft
+        }, 0) / backendsWithData.length
+      : 1000 // Default to 1000ms if no backends have data
+
+    // Assign TTFT values, using average for backends without data
+    const backendStatsWithTTFT = backendStats.map(stat => {
+      let averageTTFT: number
+      if (stat.stats) {
+        averageTTFT = useStreaming ? stat.stats.averageStreamingTTFT : stat.stats.averageNonStreamingTTFT
+      } else {
+        // Cold start protection: use average TTFT
+        averageTTFT = avgTTFT
+      }
+
+      return {
+        backend: stat.backend,
+        averageTTFT
+      }
+    })
+
     // Sort by average TTFT (ascending)
-    backendStats.sort((a, b) => a.averageTTFT - b.averageTTFT)
+    backendStatsWithTTFT.sort((a, b) => a.averageTTFT - b.averageTTFT)
 
     // Return backend with lowest TTFT
-    return backendStats[0].backend
+    return backendStatsWithTTFT[0].backend
   }
 
   /**
