@@ -113,7 +113,8 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
       });
     });
 
-    return Array.from(timeMap.values()).sort((a, b) => a.time - b.time);
+    const result = Array.from(timeMap.values()).sort((a, b) => a.time - b.time);
+    return result;
   }, [backendIdsKey, historyData]);
 
   const formatTime = (timestamp: string | Date) => {
@@ -220,16 +221,19 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {visibleBackendIds.map((id) => (
-              <Line
-                key={id}
-                dataKey={`successRate_${id}`}
-                type="monotone"
-                stroke={`var(--color-successRate_${id})`}
-                strokeWidth={2}
-                dot={false}
-              />
-            ))}
+            {visibleBackendIds.map((id) => {
+              const color = backendColors[id];
+              return (
+                <Line
+                  key={id}
+                  dataKey={`successRate_${id}`}
+                  type="monotone"
+                  stroke={color}
+                  strokeWidth={2}
+                  dot={false}
+                />
+              );
+            })}
           </LineChart>
         </ChartContainer>
       </div>
@@ -268,16 +272,19 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {visibleBackendIds.map((id) => (
-              <Line
-                key={`streaming_${id}`}
-                dataKey={`streamingTtft_${id}`}
-                type="monotone"
-                stroke={`var(--color-streamingTtft_${id})`}
-                strokeWidth={2}
-                dot={false}
-              />
-            ))}
+            {visibleBackendIds.map((id) => {
+              const color = backendColors[id];
+              return (
+                <Line
+                  key={`streaming_${id}`}
+                  dataKey={`streamingTtft_${id}`}
+                  type="monotone"
+                  stroke={color}
+                  strokeWidth={2}
+                  dot={false}
+                />
+              );
+            })}
           </LineChart>
         </ChartContainer>
       </div>
@@ -316,16 +323,19 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {visibleBackendIds.map((id) => (
-              <Line
-                key={`nonStreaming_${id}`}
-                dataKey={`nonStreamingTtft_${id}`}
-                type="monotone"
-                stroke={`var(--color-nonStreamingTtft_${id})`}
-                strokeWidth={2}
-                dot={false}
-              />
-            ))}
+            {visibleBackendIds.map((id) => {
+              const color = backendColors[id];
+              return (
+                <Line
+                  key={`nonStreaming_${id}`}
+                  dataKey={`nonStreamingTtft_${id}`}
+                  type="monotone"
+                  stroke={color}
+                  strokeWidth={2}
+                  dot={false}
+                />
+              );
+            })}
           </LineChart>
         </ChartContainer>
       </div>
@@ -363,18 +373,21 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {visibleBackendIds.map((id) => (
-              <Area
-                key={id}
-                dataKey={`requests_${id}`}
-                type="linear"
-                fill={`var(--color-requests_${id})`}
-                fillOpacity={0.25}
-                stroke={`var(--color-requests_${id})`}
-                strokeWidth={2}
-                stackId="a"
-              />
-            ))}
+            {visibleBackendIds.map((id) => {
+              const color = backendColors[id];
+              return (
+                <Area
+                  key={id}
+                  dataKey={`requests_${id}`}
+                  type="linear"
+                  fill={color}
+                  fillOpacity={0.25}
+                  stroke={color}
+                  strokeWidth={2}
+                  stackId="a"
+                />
+              );
+            })}
           </AreaChart>
         </ChartContainer>
       </div>

@@ -353,7 +353,7 @@ admin.get('/stats/history', async (c) => {
             successRate: {
               $cond: [
                 { $eq: ['$totalRequests', 0] },
-                0,
+                1,
                 { $divide: ['$successfulRequests', '$totalRequests'] }
               ]
             },
@@ -411,7 +411,7 @@ admin.get('/stats/history', async (c) => {
               totalRequests: 0,
               successfulRequests: 0,
               failedRequests: 0,
-              successRate: 0,
+              successRate: 1,
               averageStreamingTTFT: 0,
               averageNonStreamingTTFT: 0
             })
