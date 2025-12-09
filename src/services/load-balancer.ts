@@ -35,20 +35,20 @@ export class LoadBalancer {
       return backend
     }
 
-    // Get all enabled backends for this model
-    const enabledBackends = this.configManager.getEnabledBackends(model)
+    // Get backends for selection (excluding weight=0 backends)
+    const backendsForSelection = this.configManager.getBackendsForSelection(model)
 
-    if (enabledBackends.length === 0) {
+    if (backendsForSelection.length === 0) {
       return null
     }
 
     // Single backend - no need for load balancing
-    if (enabledBackends.length === 1) {
-      return enabledBackends[0]
+    if (backendsForSelection.length === 1) {
+      return backendsForSelection[0]
     }
 
     // Apply load balancing strategy
-    return this.applyStrategy(modelConfig, enabledBackends, isStream)
+    return this.applyStrategy(modelConfig, backendsForSelection, isStream)
   }
 
   /**
@@ -74,15 +74,10 @@ export class LoadBalancer {
   /**
    * Weighted random selection strategy
    * Selects backends based on their configured weight
+   * Note: backends with weight=0 are already filtered out before calling this method
    */
   private selectByWeight(backends: BackendConfig[]): BackendConfig {
     const totalWeight = backends.reduce((sum, backend) => sum + backend.weight, 0)
-
-    if (totalWeight === 0) {
-      // If all weights are 0, select randomly with equal probability
-      const randomIndex = Math.floor(Math.random() * backends.length)
-      return backends[randomIndex]
-    }
 
     // Weighted random selection
     let random = Math.random() * totalWeight
@@ -161,6 +156,7 @@ export class LoadBalancer {
    * - Circuit breaker for high-error backends
    * - Cold start protection
    * - Configurable weight integration
+   * Note: backends with weight=0 are already filtered out before calling this method
    */
   private async selectByMinErrorRate(backends: BackendConfig[], modelConfig: ModelConfig): Promise<BackendConfig> {
     // Get configuration options with defaults

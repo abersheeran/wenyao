@@ -69,6 +69,16 @@ export class ConfigManager {
     return modelConfig.backends.filter(backend => backend.enabled)
   }
 
+  // Get all enabled backends including those with weight=0 (for fallback)
+  getAllEnabledBackends(model: string): BackendConfig[] {
+    return this.getEnabledBackends(model)
+  }
+
+  // Get backends for load balancer selection (excluding weight=0)
+  getBackendsForSelection(model: string): BackendConfig[] {
+    return this.getEnabledBackends(model).filter(backend => backend.weight > 0)
+  }
+
   // Get specific backend by model and backend ID
   getBackend(model: string, backendId: string): BackendConfig | undefined {
     const modelConfig = this.modelConfigs.get(model)

@@ -2,7 +2,8 @@ import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import { loadBalancer } from '../services/load-balancer.js'
 import { statsTracker } from '../services/stats-tracker.js'
-import type { ChatCompletionRequest } from '../types/backend.js'
+import { configManager } from '../services/config-manager.js'
+import type { ChatCompletionRequest, BackendConfig } from '../types/backend.js'
 import type { ApiKey } from '../types/apikey.js'
 import type { Variables } from '../types/context.js'
 import { proxyAuth } from '../middleware/auth.js'
@@ -12,7 +13,87 @@ const proxyApp = new Hono<{ Variables: Variables }>()
 
 proxyApp.use('*', proxyAuth);
 
-// POST /v1/chat/completions - Proxy to backend with load balancing
+/**
+ * Get ordered backends for fallback based on current backend position
+ * Returns backends in circular order starting from the next position after currentBackend
+ */
+function getOrderedBackendsForFallback(
+  allBackends: BackendConfig[],
+  currentBackend: BackendConfig,
+  triedBackendIds: Set<string>
+): BackendConfig[] {
+  const currentIndex = allBackends.findIndex(b => b.id === currentBackend.id)
+  if (currentIndex === -1) {
+    // Current backend not found, return all untried backends
+    return allBackends.filter(b => !triedBackendIds.has(b.id))
+  }
+
+  // Build circular order starting from next position
+  const orderedBackends: BackendConfig[] = []
+  for (let i = 1; i < allBackends.length; i++) {
+    const index = (currentIndex + i) % allBackends.length
+    const backend = allBackends[index]
+    if (!triedBackendIds.has(backend.id)) {
+      orderedBackends.push(backend)
+    }
+  }
+
+  return orderedBackends
+}
+
+/**
+ * Try to make a request to a backend
+ * Returns { success: true, response } on success
+ * Returns { success: false, response, error } on failure
+ */
+async function tryBackendRequest(
+  backend: BackendConfig,
+  requestBody: ChatCompletionRequest,
+  headers: Record<string, string>
+): Promise<{ success: boolean; response: Response; error?: any }> {
+  const startTime = Date.now()
+  statsTracker.incrementActive(backend.id)
+
+  try {
+    // Use backend-specific model if configured
+    const modifiedRequest = {
+      ...requestBody,
+      model: backend.model || requestBody.model
+    }
+
+    // Update headers with backend's API key
+    const backendHeaders = { ...headers }
+    backendHeaders['Authorization'] = `Bearer ${backend.apiKey}`
+
+    // Make request to backend
+    const response = await proxy(new URL("/v1/chat/completions", backend.url), {
+      method: 'POST',
+      headers: backendHeaders,
+      body: JSON.stringify(modifiedRequest)
+    })
+
+    // Check if response is successful (2xx status)
+    if (response.ok) {
+      return { success: true, response }
+    } else {
+      // Non-2xx response, record failure
+      const duration = Date.now() - startTime
+      statsTracker.recordFailure(backend.id, duration)
+      statsTracker.decrementActive(backend.id)
+      console.log(`[Proxy] Backend ${backend.id} returned non-2xx status: ${response.status}`)
+      return { success: false, response }
+    }
+  } catch (error) {
+    // Network error or other exception
+    const duration = Date.now() - startTime
+    statsTracker.recordFailure(backend.id, duration)
+    statsTracker.decrementActive(backend.id)
+    console.log(`[Proxy] Backend ${backend.id} request failed:`, error)
+    return { success: false, response: new Response(null, { status: 500 }), error }
+  }
+}
+
+// POST /v1/chat/completions - Proxy to backend with load balancing and fallback
 proxyApp.post('/chat/completions', async (c) => {
   try {
     // Parse request body first to get the model
@@ -44,9 +125,9 @@ proxyApp.post('/chat/completions', async (c) => {
     const backendId = c.req.header('X-Backend-ID')
 
     // Select backend based on model, optional backend-id, and stream type
-    const backend = await loadBalancer.selectBackend(requestBody.model, backendId, requestBody.stream)
+    const initialBackend = await loadBalancer.selectBackend(requestBody.model, backendId, requestBody.stream)
 
-    if (!backend) {
+    if (!initialBackend) {
       console.log(`[Proxy] No available backend for model: ${requestBody.model}, backendId: ${backendId || 'none'}`)
       return c.json({
         error: {
@@ -57,117 +138,110 @@ proxyApp.post('/chat/completions', async (c) => {
       }, 503)
     }
 
-    // Use backend-specific model if configured, otherwise use the client's model
-    const modifiedRequest = {
-      ...requestBody,
-      model: backend.model || requestBody.model
-    }
+    // Get all enabled backends for fallback
+    const allBackends = configManager.getAllEnabledBackends(requestBody.model)
 
-    const headers = { ...c.req.header() };
-    delete headers['content-length']; // Remove content-length to allow fetch to set it correctly
-    headers['Authorization'] = `Bearer ${backend.apiKey}`;
+    // Prepare headers (without Authorization, will be set per backend)
+    const headers = { ...c.req.header() }
+    delete headers['content-length']
+    delete headers['authorization'] // Remove client's auth header
 
-    // Record request start time and increment active requests
-    const startTime = Date.now()
-    let firstTokenTime: number | undefined
-    statsTracker.incrementActive(backend.id)
+    // Try initial backend first, then fallback to others if needed
+    const triedBackendIds = new Set<string>([initialBackend.id])
+    let currentBackend = initialBackend
+    let lastResponse: Response | null = null
 
-    try {
-      // Call backend using fetch
-      const response = await proxy(new URL("/v1/chat/completions", backend.url), {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify(modifiedRequest)
-      })
+    console.log(`[Proxy] Starting request to model ${requestBody.model}, initial backend: ${initialBackend.id}`)
 
-      // Handle streaming response
-      if (requestBody.stream) {
-        // Check if response is ok before starting stream
-        if (!response.ok) {
-          const duration = Date.now() - startTime
-          statsTracker.recordFailure(backend.id, duration)
-          statsTracker.decrementActive(backend.id)
-          return response
-        }
+    // Try backends until one succeeds or all fail
+    while (true) {
+      console.log(`[Proxy] Trying backend: ${currentBackend.id}`)
+      const result = await tryBackendRequest(currentBackend, requestBody, headers)
 
-        // Stream the response
-        return stream(c, async (streamWriter) => {
-          const reader = response.body?.getReader()
-          if (!reader) {
-            const duration = Date.now() - startTime
-            statsTracker.recordFailure(backend.id, duration)
-            statsTracker.decrementActive(backend.id)
-            throw new Error('No response body')
-          }
+      if (result.success) {
+        // Success! Process the response
+        const response = result.response
+        const startTime = Date.now() // Note: actual start time is within tryBackendRequest
 
-          const decoder = new TextDecoder()
-          let isFirstChunk = true
-
-          try {
-            while (true) {
-              const { done, value } = await reader.read()
-
-              if (done) {
-                break
-              }
-
-              // Record TTFT on first chunk
-              if (isFirstChunk) {
-                firstTokenTime = Date.now() - startTime
-                isFirstChunk = false
-              }
-
-              // Write chunk to client
-              const chunk = decoder.decode(value, { stream: true })
-              await streamWriter.write(chunk)
+        // Handle streaming response
+        if (requestBody.stream) {
+          return stream(c, async (streamWriter) => {
+            const reader = response.body?.getReader()
+            if (!reader) {
+              statsTracker.decrementActive(currentBackend.id)
+              throw new Error('No response body')
             }
 
-            // Record success with TTFT and duration
-            const duration = Date.now() - startTime
-            statsTracker.recordSuccess(backend.id, firstTokenTime, duration, true)
-            statsTracker.decrementActive(backend.id)
-          } catch (error) {
-            const duration = Date.now() - startTime
-            statsTracker.recordFailure(backend.id, duration)
-            statsTracker.decrementActive(backend.id)
-            throw error
-          }
-        })
-      } else {
-        // Non-streaming response
-        if (!response.ok) {
+            const decoder = new TextDecoder()
+            let isFirstChunk = true
+            let firstTokenTime: number | undefined
+            const requestStartTime = Date.now()
+
+            try {
+              while (true) {
+                const { done, value } = await reader.read()
+
+                if (done) {
+                  break
+                }
+
+                // Record TTFT on first chunk
+                if (isFirstChunk) {
+                  firstTokenTime = Date.now() - requestStartTime
+                  isFirstChunk = false
+                }
+
+                // Write chunk to client
+                const chunk = decoder.decode(value, { stream: true })
+                await streamWriter.write(chunk)
+              }
+
+              // Record success with TTFT and duration
+              const duration = Date.now() - requestStartTime
+              statsTracker.recordSuccess(currentBackend.id, firstTokenTime, duration, true)
+              statsTracker.decrementActive(currentBackend.id)
+            } catch (error) {
+              // Stream error after starting - don't fallback, just record failure
+              const duration = Date.now() - requestStartTime
+              statsTracker.recordFailure(currentBackend.id, duration)
+              statsTracker.decrementActive(currentBackend.id)
+              throw error
+            }
+          })
+        } else {
+          // Non-streaming response
+          const responseBody = await response.json()
+
+          // For non-streaming, TTFT and duration are the same
           const duration = Date.now() - startTime
-          statsTracker.recordFailure(backend.id, duration)
-          statsTracker.decrementActive(backend.id)
-          return response
+          statsTracker.recordSuccess(currentBackend.id, duration, duration, false)
+          statsTracker.decrementActive(currentBackend.id)
+
+          console.log(`[Proxy] Request succeeded with backend: ${currentBackend.id}`)
+          return c.json(responseBody)
         }
-
-        const responseBody = await response.json()
-
-        // For non-streaming, TTFT and duration are the same
-        const duration = Date.now() - startTime
-        statsTracker.recordSuccess(backend.id, duration, duration, false)
-        statsTracker.decrementActive(backend.id)
-
-        return c.json(responseBody)
       }
-    } catch (error) {
-      // Record failure and return error as-is
-      const duration = Date.now() - startTime
-      statsTracker.recordFailure(backend.id, duration)
-      statsTracker.decrementActive(backend.id)
 
-      // Return error in OpenAI format
-      return c.json({
-        error: {
-          message: error instanceof Error ? error.message : 'Backend request failed',
-          type: 'backend_error',
-          code: 'backend_failed'
-        }
-      }, 500)
+      // Request failed, try fallback
+      lastResponse = result.response
+
+      // Get next backends to try
+      const nextBackends = getOrderedBackendsForFallback(allBackends, currentBackend, triedBackendIds)
+
+      if (nextBackends.length === 0) {
+        // No more backends to try, return last error
+        console.log(`[Proxy] All backends failed for model ${requestBody.model}`)
+        return lastResponse
+      }
+
+      // Try next backend
+      currentBackend = nextBackends[0]
+      triedBackendIds.add(currentBackend.id)
+      console.log(`[Proxy] Falling back to backend: ${currentBackend.id}`)
     }
   } catch (error) {
     // Handle errors in request processing (before backend selection)
+    console.error('[Proxy] Request processing error:', error)
     return c.json({
       error: {
         message: error instanceof Error ? error.message : 'Request processing failed',
