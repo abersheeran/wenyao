@@ -43,14 +43,14 @@ function getOrderedBackendsForFallback(
 
 /**
  * Try to make a request to a backend
- * Returns { success: true, response } on success
+ * Returns { success: true, response, startTime } on success
  * Returns { success: false, response, error } on failure
  */
 async function tryBackendRequest(
   backend: BackendConfig,
   requestBody: ChatCompletionRequest,
   headers: Record<string, string>
-): Promise<{ success: boolean; response: Response; error?: any }> {
+): Promise<{ success: boolean; response: Response; startTime?: number; error?: any }> {
   const startTime = Date.now()
   statsTracker.incrementActive(backend.id)
 
@@ -74,7 +74,7 @@ async function tryBackendRequest(
 
     // Check if response is successful (2xx status)
     if (response.ok) {
-      return { success: true, response }
+      return { success: true, response, startTime }
     } else {
       // Non-2xx response, record failure
       const duration = Date.now() - startTime
@@ -161,7 +161,7 @@ proxyApp.post('/chat/completions', async (c) => {
       if (result.success) {
         // Success! Process the response
         const response = result.response
-        const startTime = Date.now() // Note: actual start time is within tryBackendRequest
+        const requestStartTime = result.startTime! // Actual start time from tryBackendRequest
 
         // Handle streaming response
         if (requestBody.stream) {
@@ -175,7 +175,6 @@ proxyApp.post('/chat/completions', async (c) => {
             const decoder = new TextDecoder()
             let isFirstChunk = true
             let firstTokenTime: number | undefined
-            const requestStartTime = Date.now()
 
             try {
               while (true) {
@@ -213,7 +212,7 @@ proxyApp.post('/chat/completions', async (c) => {
           const responseBody = await response.json()
 
           // For non-streaming, TTFT and duration are the same
-          const duration = Date.now() - startTime
+          const duration = Date.now() - requestStartTime
           statsTracker.recordSuccess(currentBackend.id, duration, duration, false)
           statsTracker.decrementActive(currentBackend.id)
 
