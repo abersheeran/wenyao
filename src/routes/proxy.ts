@@ -66,7 +66,7 @@ async function tryBackendRequest(
     backendHeaders['Authorization'] = `Bearer ${backend.apiKey}`
 
     // Make request to backend
-    const response = await proxy(new URL("/v1/chat/completions", backend.url), {
+    const response = await proxy(new URL("v1/chat/completions", backend.url), {
       method: 'POST',
       headers: backendHeaders,
       body: JSON.stringify(modifiedRequest)
