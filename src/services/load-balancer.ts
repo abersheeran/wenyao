@@ -74,15 +74,22 @@ export class LoadBalancer {
   /**
    * Weighted random selection strategy
    * Selects backends based on their configured weight
-   * Note: backends with weight=0 are already filtered out before calling this method
+   * Filters out backends with weight=0
    */
   private selectByWeight(backends: BackendConfig[]): BackendConfig {
-    const totalWeight = backends.reduce((sum, backend) => sum + backend.weight, 0)
+    // Filter out backends with weight=0
+    const eligibleBackends = backends.filter(b => b.weight > 0)
+
+    if (eligibleBackends.length === 0) {
+      throw new Error('No backends with weight > 0 available for selection')
+    }
+
+    const totalWeight = eligibleBackends.reduce((sum, backend) => sum + backend.weight, 0)
 
     // Weighted random selection
     let random = Math.random() * totalWeight
 
-    for (const backend of backends) {
+    for (const backend of eligibleBackends) {
       random -= backend.weight
       if (random <= 0) {
         return backend
@@ -90,7 +97,7 @@ export class LoadBalancer {
     }
 
     // Fallback to last backend (should not reach here)
-    return backends[backends.length - 1]
+    return eligibleBackends[eligibleBackends.length - 1]
   }
 
   /**
@@ -99,13 +106,21 @@ export class LoadBalancer {
    * Uses stream-specific TTFT based on isStream parameter (undefined treated as non-streaming)
    * Uses time-windowed statistics (15 minutes) for more responsive selection
    * Includes cold start protection: backends without data use average TTFT of other backends
+   * Filters out backends with weight=0
    */
   private async selectByLowestTTFT(backends: BackendConfig[], isStream?: boolean): Promise<BackendConfig> {
+    // Filter out backends with weight=0
+    const eligibleBackends = backends.filter(b => b.weight > 0)
+
+    if (eligibleBackends.length === 0) {
+      throw new Error('No backends with weight > 0 available for selection')
+    }
+
     // Treat undefined isStream as false (non-streaming)
     const useStreaming = isStream === true
 
-    // Get recent stats for all backends (15 minute window)
-    const backendStatsPromises = backends.map(async backend => {
+    // Get recent stats for all eligible backends (15 minute window)
+    const backendStatsPromises = eligibleBackends.map(async backend => {
       const stats = await statsTracker.getRecentStats(backend.id, 15)
 
       return {
@@ -156,9 +171,16 @@ export class LoadBalancer {
    * - Circuit breaker for high-error backends
    * - Cold start protection
    * - Configurable weight integration
-   * Note: backends with weight=0 are already filtered out before calling this method
+   * Filters out backends with weight=0
    */
   private async selectByMinErrorRate(backends: BackendConfig[], modelConfig: ModelConfig): Promise<BackendConfig> {
+    // Filter out backends with weight=0
+    const eligibleBackends = backends.filter(b => b.weight > 0)
+
+    if (eligibleBackends.length === 0) {
+      throw new Error('No backends with weight > 0 available for selection')
+    }
+
     // Get configuration options with defaults
     const options = modelConfig.minErrorRateOptions || {}
     const MIN_REQUESTS = options.minRequests ?? 20
@@ -166,8 +188,8 @@ export class LoadBalancer {
     const EPSILON = options.epsilon ?? 0.001
     const TIME_WINDOW_MINUTES = options.timeWindowMinutes ?? 15
 
-    // Get time-windowed stats for all backends
-    const backendStatsPromises = backends.map(async backend => {
+    // Get time-windowed stats for all eligible backends
+    const backendStatsPromises = eligibleBackends.map(async backend => {
       const stats = await statsTracker.getRecentStats(backend.id, TIME_WINDOW_MINUTES)
       return {
         backend,
@@ -220,7 +242,7 @@ export class LoadBalancer {
     // If all backends are circuit broken, fall back to weighted strategy
     if (weightsWithErrorRate.length === 0) {
       console.warn('All backends circuit broken, falling back to weighted strategy')
-      return this.selectByWeight(backends)
+      return this.selectByWeight(eligibleBackends)
     }
 
     // Calculate total weight
