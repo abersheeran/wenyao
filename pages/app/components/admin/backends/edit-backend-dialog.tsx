@@ -33,7 +33,9 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
       apiKey: form.apiKey,
       weight: form.weight,
       enabled: form.enabled,
-      model: form.model
+      model: form.model,
+      streamingTTFTTimeout: form.streamingTTFTTimeout,
+      nonStreamingTTFTTimeout: form.nonStreamingTTFTTimeout
     });
     onSaved();
   }, [api, model, form, onSaved]);
@@ -100,6 +102,41 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
                 checked={form.enabled}
                 onCheckedChange={(v) => setForm({ ...form, enabled: v })}
               />
+            </div>
+          </div>
+
+          {/* TTFT Timeout Section */}
+          <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+            <h4 className="text-sm font-medium text-gray-700">TTFT 超时配置 (可选)</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm mb-1">流式请求超时 (ms)</label>
+                <Input
+                  type="number"
+                  min={0}
+                  step={1000}
+                  value={form.streamingTTFTTimeout || ""}
+                  onChange={(e) => setForm({ ...form, streamingTTFTTimeout: e.target.value === "" ? 0 : Number(e.target.value) })}
+                  placeholder="例如: 10000 (留空或填 0 表示不限制)"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  流式请求第一个 token 到达的超时时间（毫秒），留空表示不限制
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">非流式请求超时 (ms)</label>
+                <Input
+                  type="number"
+                  min={0}
+                  step={1000}
+                  value={form.nonStreamingTTFTTimeout || ""}
+                  onChange={(e) => setForm({ ...form, nonStreamingTTFTTimeout: e.target.value === "" ? 0 : Number(e.target.value) })}
+                  placeholder="例如: 60000 (留空或填 0 表示不限制)"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  非流式请求完整响应的超时时间（毫秒），留空表示不限制
+                </p>
+              </div>
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2">

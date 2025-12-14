@@ -8,6 +8,8 @@ import type { ApiKey } from '../types/apikey.js'
 import type { Variables } from '../types/context.js'
 import { proxyAuth } from '../middleware/auth.js'
 import { proxy } from 'hono/proxy'
+import type { Context } from 'hono'
+import type { BlankInput } from 'hono/types'
 
 const proxyApp = new Hono<{ Variables: Variables }>()
 
@@ -39,6 +41,213 @@ function getOrderedBackendsForFallback(
   }
 
   return orderedBackends
+}
+
+/**
+ * Handle streaming response with TTFT timeout support
+ * Returns { success: true, response } on success
+ * Returns { success: false, error } on TTFT timeout (for fallback)
+ */
+async function handleStreamingResponse(
+  c: Context<{ Variables: Variables }, "/chat/completions", BlankInput>,
+  response: Response,
+  currentBackend: BackendConfig,
+  requestStartTime: number
+): Promise<{ success: boolean; response?: Response; error?: string }> {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    statsTracker.decrementActive(currentBackend.id)
+    return {
+      success: false,
+      error: 'No response body',
+      response: new Response(JSON.stringify({
+        error: {
+          message: 'No response body',
+          type: 'backend_error',
+          code: 'no_response_body'
+        }
+      }), { status: 500 })
+    }
+  }
+
+  const decoder = new TextDecoder()
+  let isFirstChunk = true
+  let firstTokenTime: number | undefined
+  let timeoutId: NodeJS.Timeout | undefined
+  let timeoutOccurred = false
+
+  // Set up TTFT timeout if configured (both 0 and undefined mean no timeout)
+  const ttftTimeout = currentBackend.streamingTTFTTimeout
+  if (ttftTimeout && ttftTimeout > 0) {
+    // Calculate remaining timeout based on time already elapsed
+    const elapsedTime = Date.now() - requestStartTime
+    const remainingTimeout = Math.max(0, ttftTimeout - elapsedTime)
+
+    if (remainingTimeout > 0) {
+      timeoutId = setTimeout(() => {
+        timeoutOccurred = true
+        reader.cancel('TTFT timeout exceeded')
+      }, remainingTimeout)
+    } else {
+      // Already exceeded timeout
+      const duration = Date.now() - requestStartTime
+      statsTracker.recordFailure(currentBackend.id, duration)
+      statsTracker.decrementActive(currentBackend.id)
+      return {
+        success: false,
+        error: 'Streaming TTFT timeout exceeded',
+        response: new Response(JSON.stringify({
+          error: {
+            message: 'Streaming TTFT timeout exceeded',
+            type: 'timeout_error',
+            code: 'ttft_timeout'
+          }
+        }), { status: 504 })
+      }
+    }
+  }
+
+  // Start streaming to client
+  const streamResponse = stream(c, async (streamWriter) => {
+    while (true) {
+      const { done, value } = await reader.read()
+
+      if (done) {
+        break
+      }
+
+      // Record TTFT on first chunk and clear timeout
+      if (isFirstChunk) {
+        firstTokenTime = Date.now() - requestStartTime
+        isFirstChunk = false
+
+        // Clear timeout on successful first token
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+        }
+
+        // Check if timeout occurred during read
+        if (timeoutOccurred) {
+          const duration = Date.now() - requestStartTime
+          statsTracker.recordFailure(currentBackend.id, duration)
+          statsTracker.decrementActive(currentBackend.id)
+          // Cannot return error result here as we're already streaming
+          // This will close the stream
+          return
+        }
+      }
+
+      // Write chunk to client
+      const chunk = decoder.decode(value, { stream: true })
+      await streamWriter.write(chunk)
+    }
+
+    // Record success with TTFT and duration
+    const duration = Date.now() - requestStartTime
+    statsTracker.recordSuccess(currentBackend.id, firstTokenTime, duration, true)
+    statsTracker.decrementActive(currentBackend.id)
+  })
+
+  // Check if timeout occurred before streaming started
+  if (timeoutOccurred && isFirstChunk) {
+    const duration = Date.now() - requestStartTime
+    statsTracker.recordFailure(currentBackend.id, duration)
+    statsTracker.decrementActive(currentBackend.id)
+    return {
+      success: false,
+      error: 'Streaming TTFT timeout exceeded',
+      response: new Response(JSON.stringify({
+        error: {
+          message: 'Streaming TTFT timeout exceeded',
+          type: 'timeout_error',
+          code: 'ttft_timeout'
+        }
+      }), { status: 504 })
+    }
+  }
+
+  return { success: true, response: streamResponse }
+}
+
+/**
+ * Handle non-streaming response with TTFT timeout support
+ * Returns { success: true, response } on success
+ * Returns { success: false, error } on TTFT timeout (for fallback)
+ */
+async function handleNonStreamingResponse(
+  c: Context<{ Variables: Variables }, "/chat/completions", BlankInput>,
+  response: Response,
+  currentBackend: BackendConfig,
+  requestStartTime: number
+): Promise<{ success: boolean; response?: Response; error?: string }> {
+  // Both 0 and undefined mean no timeout
+  const ttftTimeout = currentBackend.nonStreamingTTFTTimeout
+
+  let responseBody
+  if (ttftTimeout && ttftTimeout > 0) {
+    // Calculate remaining timeout based on time already elapsed
+    const elapsedTime = Date.now() - requestStartTime
+    const remainingTimeout = Math.max(0, ttftTimeout - elapsedTime)
+
+    if (remainingTimeout === 0) {
+      // Already exceeded timeout
+      const duration = Date.now() - requestStartTime
+      statsTracker.recordFailure(currentBackend.id, duration)
+      statsTracker.decrementActive(currentBackend.id)
+      return {
+        success: false,
+        error: 'Non-streaming TTFT timeout exceeded',
+        response: new Response(JSON.stringify({
+          error: {
+            message: 'Non-streaming TTFT timeout exceeded',
+            type: 'timeout_error',
+            code: 'ttft_timeout'
+          }
+        }), { status: 504 })
+      }
+    }
+
+    // Use Promise.race to implement timeout with remaining time
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Non-streaming TTFT timeout exceeded')), remainingTimeout)
+    })
+
+    const result = await Promise.race([
+      response.json().then(body => ({ timedOut: false, body })),
+      timeoutPromise.then(() => ({ timedOut: true, body: null }))
+    ]) as { timedOut: boolean; body: any }
+
+    if (result.timedOut) {
+      // Timeout occurred
+      const duration = Date.now() - requestStartTime
+      statsTracker.recordFailure(currentBackend.id, duration)
+      statsTracker.decrementActive(currentBackend.id)
+      return {
+        success: false,
+        error: 'Non-streaming TTFT timeout exceeded',
+        response: new Response(JSON.stringify({
+          error: {
+            message: 'Non-streaming TTFT timeout exceeded',
+            type: 'timeout_error',
+            code: 'ttft_timeout'
+          }
+        }), { status: 504 })
+      }
+    }
+
+    responseBody = result.body
+  } else {
+    // No timeout configured
+    responseBody = await response.json()
+  }
+
+  // For non-streaming, TTFT and duration are the same
+  const duration = Date.now() - requestStartTime
+  statsTracker.recordSuccess(currentBackend.id, duration, duration, false)
+  statsTracker.decrementActive(currentBackend.id)
+
+  console.log(`[Proxy] Request succeeded with backend: ${currentBackend.id}`)
+  return { success: true, response: c.json(responseBody) }
 }
 
 /**
@@ -163,62 +372,22 @@ proxyApp.post('/chat/completions', async (c) => {
         const response = result.response
         const requestStartTime = result.startTime! // Actual start time from tryBackendRequest
 
-        // Handle streaming response
+        // Handle streaming or non-streaming response
+        let handleResult
         if (requestBody.stream) {
-          return stream(c, async (streamWriter) => {
-            const reader = response.body?.getReader()
-            if (!reader) {
-              statsTracker.decrementActive(currentBackend.id)
-              throw new Error('No response body')
-            }
-
-            const decoder = new TextDecoder()
-            let isFirstChunk = true
-            let firstTokenTime: number | undefined
-
-            try {
-              while (true) {
-                const { done, value } = await reader.read()
-
-                if (done) {
-                  break
-                }
-
-                // Record TTFT on first chunk
-                if (isFirstChunk) {
-                  firstTokenTime = Date.now() - requestStartTime
-                  isFirstChunk = false
-                }
-
-                // Write chunk to client
-                const chunk = decoder.decode(value, { stream: true })
-                await streamWriter.write(chunk)
-              }
-
-              // Record success with TTFT and duration
-              const duration = Date.now() - requestStartTime
-              statsTracker.recordSuccess(currentBackend.id, firstTokenTime, duration, true)
-              statsTracker.decrementActive(currentBackend.id)
-            } catch (error) {
-              // Stream error after starting - don't fallback, just record failure
-              const duration = Date.now() - requestStartTime
-              statsTracker.recordFailure(currentBackend.id, duration)
-              statsTracker.decrementActive(currentBackend.id)
-              throw error
-            }
-          })
+          handleResult = await handleStreamingResponse(c, response, currentBackend, requestStartTime)
         } else {
-          // Non-streaming response
-          const responseBody = await response.json()
-
-          // For non-streaming, TTFT and duration are the same
-          const duration = Date.now() - requestStartTime
-          statsTracker.recordSuccess(currentBackend.id, duration, duration, false)
-          statsTracker.decrementActive(currentBackend.id)
-
-          console.log(`[Proxy] Request succeeded with backend: ${currentBackend.id}`)
-          return c.json(responseBody)
+          handleResult = await handleNonStreamingResponse(c, response, currentBackend, requestStartTime)
         }
+
+        // Check if processing succeeded
+        if (handleResult.success) {
+          return handleResult.response!
+        }
+
+        // TTFT timeout or other processing error occurred
+        console.log(`[Proxy] Backend ${currentBackend.id} processing failed: ${handleResult.error}`)
+        lastResponse = handleResult.response!
       }
 
       // Request failed, try fallback

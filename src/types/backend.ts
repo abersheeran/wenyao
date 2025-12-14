@@ -9,6 +9,8 @@ export interface BackendConfig {
   weight: number
   enabled: boolean
   model?: string // Optional: Override the model name when forwarding to this backend
+  streamingTTFTTimeout?: number // Optional: TTFT timeout in milliseconds for streaming requests
+  nonStreamingTTFTTimeout?: number // Optional: TTFT timeout in milliseconds for non-streaming requests
 }
 
 // Load balancing strategy options for min-error-rate
