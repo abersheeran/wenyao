@@ -1,5 +1,5 @@
 import { MongoClient, Db, ChangeStream, Collection } from 'mongodb'
-import type { ModelConfig, StatsDataPoint } from '../types/backend.js'
+import type { ModelConfig, StatsDataPoint, RecordedRequest } from '../types/backend.js'
 import type { ApiKey } from '../types/apikey.js'
 
 export class MongoDBService {
@@ -24,6 +24,9 @@ export class MongoDBService {
 
       // Initialize stats history collection
       await this.initializeStatsHistoryCollection()
+
+      // Initialize recorded requests collection
+      await this.initializeRecordedRequestsCollection()
     } catch (error) {
       console.error('Failed to connect to MongoDB:', error)
       throw error
@@ -71,6 +74,11 @@ export class MongoDBService {
     return this.getDatabase().collection<ApiKey>('apikeys')
   }
 
+  // Recorded requests collection
+  getRecordedRequestsCollection(): Collection<RecordedRequest> {
+    return this.getDatabase().collection<RecordedRequest>('recorded_requests')
+  }
+
   // Initialize stats history collection with indexes
   async initializeStatsHistoryCollection(): Promise<void> {
     const collection = this.getStatsHistoryCollection()
@@ -91,6 +99,22 @@ export class MongoDBService {
     )
 
     console.log('Stats history collection initialized with indexes')
+  }
+
+  // Initialize recorded requests collection with indexes
+  async initializeRecordedRequestsCollection(): Promise<void> {
+    const collection = this.getRecordedRequestsCollection()
+
+    // Create compound index for backend + time queries (primary use case)
+    await collection.createIndex({ backendId: 1, timestamp: -1 })
+
+    // Create index for model + time queries
+    await collection.createIndex({ model: 1, timestamp: -1 })
+
+    // Create index for time range queries
+    await collection.createIndex({ timestamp: -1 })
+
+    console.log('Recorded requests collection initialized with indexes')
   }
 
   async watchModels(

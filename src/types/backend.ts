@@ -11,6 +11,7 @@ export interface BackendConfig {
   model?: string // Optional: Override the model name when forwarding to this backend
   streamingTTFTTimeout?: number // Optional: TTFT timeout in milliseconds for streaming requests
   nonStreamingTTFTTimeout?: number // Optional: TTFT timeout in milliseconds for non-streaming requests
+  recordRequests?: boolean // Optional: Record all requests (URL, headers, body) to MongoDB
 }
 
 // Load balancing strategy options for min-error-rate
@@ -102,4 +103,14 @@ export interface ChatCompletionResponse {
     completion_tokens: number
     total_tokens: number
   }
+}
+
+// Recorded request data
+export interface RecordedRequest {
+  backendId: string
+  model: string
+  timestamp: Date
+  url: string // Full request URL
+  headers: Record<string, string> // Complete headers as-is
+  body: string // Request body as string (JSON stringified)
 }

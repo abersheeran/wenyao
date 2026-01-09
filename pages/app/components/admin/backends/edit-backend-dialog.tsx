@@ -35,7 +35,8 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
       enabled: form.enabled,
       model: form.model,
       streamingTTFTTimeout: form.streamingTTFTTimeout,
-      nonStreamingTTFTTimeout: form.nonStreamingTTFTTimeout
+      nonStreamingTTFTTimeout: form.nonStreamingTTFTTimeout,
+      recordRequests: form.recordRequests
     });
     onSaved();
   }, [api, model, form, onSaved]);
@@ -44,7 +45,7 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Backend: {form.id}</DialogTitle>
         </DialogHeader>
@@ -139,6 +140,28 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
               </div>
             </div>
           </div>
+
+          {/* Request Recording Section */}
+          <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+            <h4 className="text-sm font-medium text-gray-700">请求记录 (可选)</h4>
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <label className="block text-sm mb-1" htmlFor="record-requests-edit">
+                  记录所有请求
+                </label>
+                <p className="text-xs text-gray-500">
+                  启用后将记录所有发往此 backend 的请求（URL、Headers、Body）。响应不会被记录。
+                </p>
+              </div>
+              <Switch
+                id="record-requests-edit"
+                size="md"
+                checked={form.recordRequests || false}
+                onCheckedChange={(v) => setForm({ ...form, recordRequests: v })}
+              />
+            </div>
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel

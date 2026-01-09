@@ -26,14 +26,15 @@ export function AddBackendDialog({ open, onOpenChange, model, onAdded }: {
     enabled: true,
     model: undefined,
     streamingTTFTTimeout: 0,
-    nonStreamingTTFTTimeout: 0
+    nonStreamingTTFTTimeout: 0,
+    recordRequests: false
   });
 
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!model) return;
     await api.addBackend(model, form);
-    setForm({ id: "", url: "", apiKey: "", weight: 1, enabled: true, model: undefined, streamingTTFTTimeout: 0, nonStreamingTTFTTimeout: 0 });
+    setForm({ id: "", url: "", apiKey: "", weight: 1, enabled: true, model: undefined, streamingTTFTTimeout: 0, nonStreamingTTFTTimeout: 0, recordRequests: false });
     onOpenChange(false);
     onAdded();
   }, [api, model, form, onOpenChange, onAdded]);
@@ -42,7 +43,7 @@ export function AddBackendDialog({ open, onOpenChange, model, onAdded }: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Add Backend to {model}</DialogTitle>
         </DialogHeader>
@@ -133,6 +134,28 @@ export function AddBackendDialog({ open, onOpenChange, model, onAdded }: {
               </div>
             </div>
           </div>
+
+          {/* Request Recording Section */}
+          <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+            <h4 className="text-sm font-medium text-gray-700">请求记录 (可选)</h4>
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <label className="block text-sm mb-1" htmlFor="record-requests-add">
+                  记录所有请求
+                </label>
+                <p className="text-xs text-gray-500">
+                  启用后将记录所有发往此 backend 的请求（URL、Headers、Body）。响应不会被记录。
+                </p>
+              </div>
+              <Switch
+                id="record-requests-add"
+                size="md"
+                checked={form.recordRequests || false}
+                onCheckedChange={(v) => setForm({ ...form, recordRequests: v })}
+              />
+            </div>
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel

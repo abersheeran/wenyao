@@ -9,6 +9,7 @@ export type BackendConfig = {
   model?: string; // Optional: Override the model name when forwarding to this backend
   streamingTTFTTimeout?: number; // Optional: TTFT timeout in milliseconds for streaming requests
   nonStreamingTTFTTimeout?: number; // Optional: TTFT timeout in milliseconds for non-streaming requests
+  recordRequests?: boolean; // Optional: Record all requests (URL, headers, body) to MongoDB
 };
 
 export type MinErrorRateOptions = {
@@ -63,6 +64,16 @@ export type ApiKey = {
   models: string[];
   createdAt: string | Date;
   lastUsedAt?: string | Date;
+};
+
+export type RecordedRequest = {
+  _id?: string;
+  backendId: string;
+  model: string;
+  timestamp: string | Date;
+  url: string;
+  headers: Record<string, string>;
+  body: string;
 };
 
 /**
@@ -284,5 +295,63 @@ export function useAdminApi() {
         throw new Error(error.error || "Failed to delete API key");
       }
     },
+
+    // Recorded requests operations
+    async listRecordedRequests(params?: {
+      backendId?: string;
+      model?: string;
+      startTime?: Date;
+      endTime?: Date;
+      limit?: number;
+      offset?: number;
+    }): Promise<{ requests: RecordedRequest[]; total: number; limit: number; offset: number }> {
+      const queryParams = new URLSearchParams();
+      if (params?.backendId) queryParams.append('backendId', params.backendId);
+      if (params?.model) queryParams.append('model', params.model);
+      if (params?.startTime) queryParams.append('startTime', params.startTime.toISOString());
+      if (params?.endTime) queryParams.append('endTime', params.endTime.toISOString());
+      if (params?.limit) queryParams.append('limit', params.limit.toString());
+      if (params?.offset) queryParams.append('offset', params.offset.toString());
+
+      const url = `${base}/recorded-requests${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+      const res = await fetch(url, {
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) throw new Error("Failed to load recorded requests");
+      return await res.json();
+    },
+
+    async getRecordedRequest(id: string): Promise<RecordedRequest> {
+      const res = await fetch(`${base}/recorded-requests/${encodeURIComponent(id)}`, {
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) throw new Error("Failed to load recorded request");
+      const data = await res.json();
+      return data.request;
+    },
+
+    async deleteRecordedRequests(params?: {
+      backendId?: string;
+      model?: string;
+      startTime?: Date;
+      endTime?: Date;
+    }): Promise<{ deletedCount: number }> {
+      const queryParams = new URLSearchParams();
+      if (params?.backendId) queryParams.append('backendId', params.backendId);
+      if (params?.model) queryParams.append('model', params.model);
+      if (params?.startTime) queryParams.append('startTime', params.startTime.toISOString());
+      if (params?.endTime) queryParams.append('endTime', params.endTime.toISOString());
+
+      const url = `${base}/recorded-requests${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to delete recorded requests");
+      }
+      return await res.json();
+    }
   };
 }

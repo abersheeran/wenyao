@@ -3,6 +3,7 @@ import { stream } from 'hono/streaming'
 import { loadBalancer } from '../services/load-balancer.js'
 import { statsTracker } from '../services/stats-tracker.js'
 import { configManager } from '../services/config-manager.js'
+import { requestRecorder } from '../services/request-recorder.js'
 import type { ChatCompletionRequest, BackendConfig } from '../types/backend.js'
 import type { ApiKey } from '../types/apikey.js'
 import type { Variables } from '../types/context.js'
@@ -300,8 +301,18 @@ async function tryBackendRequest(
     const backendHeaders = { ...headers }
     backendHeaders['Authorization'] = `Bearer ${backend.apiKey}`
 
+    // Record request if enabled for this backend
+    const fullUrl = new URL("v1/chat/completions", backend.url).toString()
+    await requestRecorder.recordRequest(
+      backend,
+      requestBody.model,
+      fullUrl,
+      backendHeaders,
+      modifiedRequest
+    )
+
     // Make request to backend
-    const response = await proxy(new URL("v1/chat/completions", backend.url), {
+    const response = await proxy(fullUrl, {
       method: 'POST',
       headers: backendHeaders,
       body: JSON.stringify(modifiedRequest)

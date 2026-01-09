@@ -16,7 +16,9 @@ import {
   updateApiKeySchema,
   apiKeyParamSchema
 } from '../schemas/apikey.js'
+import { recordedRequestsQuerySchema } from '../schemas/recorded-requests.js'
 import { adminAuth } from '../middleware/auth.js'
+import { ObjectId } from 'mongodb'
 
 const admin = new Hono()
 
@@ -568,6 +570,123 @@ admin.get('/instances/:instanceId/stats', async (c) => {
     return c.json({ error: 'Failed to fetch instance stats' }, 500)
   }
 })
+
+// ===== Recorded Requests Endpoints =====
+
+// GET /admin/recorded-requests - Query recorded requests with filters
+admin.get(
+  '/recorded-requests',
+  zValidator('query', recordedRequestsQuerySchema),
+  async (c) => {
+    if (!mongoDBService.isConnected()) {
+      return c.json({ error: 'MongoDB not connected' }, 503)
+    }
+
+    const { backendId, model, startTime, endTime, limit, offset } = c.req.valid('query')
+
+    try {
+      const collection = mongoDBService.getRecordedRequestsCollection()
+
+      // Build query filter
+      const query: any = {}
+      if (backendId) query.backendId = backendId
+      if (model) query.model = model
+      if (startTime || endTime) {
+        query.timestamp = {}
+        if (startTime) query.timestamp.$gte = new Date(startTime)
+        if (endTime) query.timestamp.$lte = new Date(endTime)
+      }
+
+      // Execute query with pagination
+      const [requests, total] = await Promise.all([
+        collection
+          .find(query)
+          .sort({ timestamp: -1 })
+          .skip(offset)
+          .limit(limit)
+          .toArray(),
+        collection.countDocuments(query)
+      ])
+
+      return c.json({
+        requests,
+        total,
+        limit,
+        offset
+      })
+    } catch (error) {
+      console.error('Error fetching recorded requests:', error)
+      return c.json({ error: 'Failed to fetch recorded requests' }, 500)
+    }
+  }
+)
+
+// GET /admin/recorded-requests/:id - Get a specific recorded request
+admin.get('/recorded-requests/:id', async (c) => {
+  if (!mongoDBService.isConnected()) {
+    return c.json({ error: 'MongoDB not connected' }, 503)
+  }
+
+  const id = c.req.param('id')
+
+  try {
+    const collection = mongoDBService.getRecordedRequestsCollection()
+    const request = await collection.findOne({ _id: new ObjectId(id) })
+
+    if (!request) {
+      return c.json({ error: 'Recorded request not found' }, 404)
+    }
+
+    return c.json({ request })
+  } catch (error) {
+    console.error('Error fetching recorded request:', error)
+    return c.json({ error: 'Failed to fetch recorded request' }, 500)
+  }
+})
+
+// DELETE /admin/recorded-requests - Delete recorded requests (with filters)
+admin.delete(
+  '/recorded-requests',
+  zValidator('query', recordedRequestsQuerySchema.omit({ limit: true, offset: true })),
+  async (c) => {
+    if (!mongoDBService.isConnected()) {
+      return c.json({ error: 'MongoDB not connected' }, 503)
+    }
+
+    const { backendId, model, startTime, endTime } = c.req.valid('query')
+
+    try {
+      const collection = mongoDBService.getRecordedRequestsCollection()
+
+      // Build query filter
+      const query: any = {}
+      if (backendId) query.backendId = backendId
+      if (model) query.model = model
+      if (startTime || endTime) {
+        query.timestamp = {}
+        if (startTime) query.timestamp.$gte = new Date(startTime)
+        if (endTime) query.timestamp.$lte = new Date(endTime)
+      }
+
+      // Require at least one filter to prevent accidental full deletion
+      if (Object.keys(query).length === 0) {
+        return c.json({
+          error: 'At least one filter (backendId, model, or time range) is required'
+        }, 400)
+      }
+
+      const result = await collection.deleteMany(query)
+
+      return c.json({
+        message: 'Recorded requests deleted successfully',
+        deletedCount: result.deletedCount
+      })
+    } catch (error) {
+      console.error('Error deleting recorded requests:', error)
+      return c.json({ error: 'Failed to delete recorded requests' }, 500)
+    }
+  }
+)
 
 // ===== API Key Management Endpoints =====
 
