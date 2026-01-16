@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Link, Outlet, useLocation } from "react-router";
 import { Button } from "../components/ui/button";
 import Input from "../components/ui/input";
 import {
@@ -14,13 +15,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
-import { ChevronDown } from "lucide-react";
-import { useAdminApi } from "~/apis";
-import { BackendsPanel } from "../components/admin/backends/backends-panel";
-import { ApiKeysPanel } from "../components/admin/api-keys/api-keys-panel";
-import { StatsPanel } from "../components/admin/stats/stats-panel";
-import { MetricsPanel } from "../components/admin/stats/metrics-panel";
-import { AffinityPanel } from "../components/admin/affinity/affinity-panel";
+import { Menu, LogOut } from "lucide-react";
 
 export function meta() {
   return [
@@ -29,11 +24,23 @@ export function meta() {
 }
 
 export default function Admin() {
-  const api = useAdminApi();
-  const [tab, setTab] = React.useState<string>("backends");
+  const location = useLocation();
   const [showApiKeyDialog, setShowApiKeyDialog] = React.useState(false);
   const [apiKeyInput, setApiKeyInput] = React.useState("");
   const [hasApiKey, setHasApiKey] = React.useState(false);
+
+  // 从路径获取当前 tab
+  const getCurrentTab = () => {
+    const path = location.pathname;
+    if (path === "/" || path === "") return "backends";
+    if (path.includes("/apikeys")) return "apikeys";
+    if (path.includes("/affinity")) return "affinity";
+    if (path.includes("/stats")) return "stats";
+    if (path.includes("/metrics")) return "metrics";
+    return "backends";
+  };
+
+  const tab = getCurrentTab();
 
   // 检查是否已有 API Key
   React.useEffect(() => {
@@ -62,59 +69,66 @@ export default function Admin() {
   };
 
   const tabOptions = [
-    { value: "backends", label: "Backends" },
-    { value: "apikeys", label: "API Keys" },
-    { value: "affinity", label: "Affinity" },
-    { value: "stats", label: "Stats" },
-    { value: "metrics", label: "Metrics" },
+    { value: "backends", label: "Backends", path: "/" },
+    { value: "apikeys", label: "API Keys", path: "/apikeys" },
+    { value: "affinity", label: "Affinity", path: "/affinity" },
+    { value: "stats", label: "Stats", path: "/stats" },
+    { value: "metrics", label: "Metrics", path: "/metrics" },
   ];
 
   return (
     <main className="container mx-auto p-4 space-y-4">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <header className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Admin</h1>
+
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold">Admin</h1>
+          {/* 大屏幕：Tabs */}
+          <div className="hidden sm:block">
+            <Tabs value={tab}>
+              <TabsList>
+                {tabOptions.map((option) => (
+                  <TabsTrigger key={option.value} value={option.value} asChild>
+                    <Link to={option.path}>{option.label}</Link>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          </div>
+
           {hasApiKey && (
-            <Button variant="outline" size="sm" onClick={handleClearApiKey}>
-              退出登录
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={handleClearApiKey}
+              title="退出登录"
+            >
+              <LogOut className="h-4 w-4" />
             </Button>
           )}
-        </div>
 
-        {/* 小屏幕：下拉选择 */}
-        <div className="sm:hidden">
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="w-full justify-between">
-                {tabOptions.find((option) => option.value === tab)?.label}
-                <ChevronDown className="ml-2 h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
-              {tabOptions.map((option) => (
-                <DropdownMenuItem
-                  key={option.value}
-                  onClick={() => setTab(option.value)}
-                  className={tab === option.value ? "bg-accent" : ""}
-                >
-                  {option.label}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        {/* 大屏幕：Tabs */}
-        <div className="hidden sm:flex items-center gap-4">
-          <Tabs value={tab} onValueChange={(v) => setTab(v)}>
-            <TabsList>
-              <TabsTrigger value="backends">Backends</TabsTrigger>
-              <TabsTrigger value="apikeys">API Keys</TabsTrigger>
-              <TabsTrigger value="affinity">Affinity</TabsTrigger>
-              <TabsTrigger value="stats">Stats</TabsTrigger>
-              <TabsTrigger value="metrics">Metrics</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          {/* 小屏幕：菜单图标 */}
+          <div className="sm:hidden">
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost">
+                  <Menu className="h-5 w-5" />
+                  {tabOptions.find((opt) => opt.value === tab)?.label}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {tabOptions.map((option) => (
+                  <DropdownMenuItem key={option.value} asChild>
+                    <Link
+                      to={option.path}
+                      className={tab === option.value ? "bg-accent" : ""}
+                    >
+                      {option.label}
+                    </Link>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </header>
 
@@ -146,11 +160,7 @@ export default function Admin() {
         </DialogContent>
       </Dialog>
 
-      {tab === "backends" && <BackendsPanel api={api} />}
-      {tab === "apikeys" && <ApiKeysPanel api={api} />}
-      {tab === "affinity" && <AffinityPanel api={api} />}
-      {tab === "stats" && <StatsPanel api={api} />}
-      {tab === "metrics" && <MetricsPanel api={api} />}
+      <Outlet />
     </main>
   );
 }

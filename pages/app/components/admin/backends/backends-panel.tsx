@@ -1,7 +1,6 @@
 import * as React from "react";
 import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import {
   Table,
   TableHeader,
@@ -90,67 +89,72 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
   };
 
   return (
-    <Card>
-      <CardHeader className="flex items-center justify-between">
-        <CardTitle>Models & Backends</CardTitle>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">Models & Backends</h2>
         <Button onClick={() => setAddModelOpen(true)}>Add Model</Button>
-      </CardHeader>
-      <CardContent>
-        {(listState.error || deleteModelState.error || updateEnabledState.error || deleteBackendState.error) && (
-          <p className="text-sm text-red-600 mb-2">
-            {(listState.error || deleteModelState.error || updateEnabledState.error || deleteBackendState.error)?.message}
-          </p>
-        )}
-        {listState.loading ? (
-          <p className="text-sm text-gray-500">Loading...</p>
-        ) : models.length === 0 ? (
-          <p className="text-sm text-gray-500">No models configured.</p>
-        ) : (
-          <div className="space-y-4">
+      </div>
+      {(listState.error || deleteModelState.error || updateEnabledState.error || deleteBackendState.error) && (
+        <p className="text-sm text-red-600 mb-2">
+          {(listState.error || deleteModelState.error || updateEnabledState.error || deleteBackendState.error)?.message}
+        </p>
+      )}
+      {listState.loading ? (
+        <p className="text-sm text-gray-500">Loading...</p>
+      ) : models.length === 0 ? (
+        <p className="text-sm text-gray-500">No models configured.</p>
+      ) : (
+        <div className="space-y-3">
             {models.map((modelConfig) => {
               const isExpanded = expandedModels.has(modelConfig.model);
               const strategyLabel = getStrategyLabel(modelConfig.loadBalancingStrategy);
 
               return (
-                <div key={modelConfig.model} className="border rounded-lg">
+                <div key={modelConfig.model} className="border rounded-lg shadow-sm hover:shadow-md transition-shadow">
                   {/* Model header */}
-                  <div className="flex items-center justify-between p-4 bg-gray-50 hover:bg-gray-100 cursor-pointer" onClick={() => toggleModel(modelConfig.model)}>
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg font-medium">
-                        {isExpanded ? '▼' : '▶'} {modelConfig.model}
-                      </span>
-                      <span className={`px-2 py-1 rounded text-xs font-medium ${strategyLabel.color}`}>
-                        {strategyLabel.text}
-                      </span>
-                      <span className="text-sm text-gray-600">
-                        ({modelConfig.backends.length} backend{modelConfig.backends.length !== 1 ? 's' : ''})
-                      </span>
-                    </div>
-                    <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setEditingModel(modelConfig)}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => {
-                          if (confirm(`Delete model ${modelConfig.model} and all its backends?`)) {
-                            deleteModel(modelConfig.model);
-                          }
-                        }}
-                      >
-                        Delete
-                      </Button>
+                  <div className="p-4 bg-gray-50/80 hover:bg-gray-100/80 cursor-pointer transition-colors" onClick={() => toggleModel(modelConfig.model)}>
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      {/* Model name */}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-gray-400 shrink-0">{isExpanded ? '▼' : '▶'}</span>
+                        <span className="text-lg font-medium break-all">{modelConfig.model}</span>
+                      </div>
+
+                      {/* Tags and actions */}
+                      <div className="flex items-center gap-3 flex-wrap shrink-0">
+                        <span className={`px-2 py-1 rounded text-xs font-medium whitespace-nowrap ${strategyLabel.color}`}>
+                          {strategyLabel.text}
+                        </span>
+                        <span className="text-sm text-gray-600 whitespace-nowrap">
+                          ({modelConfig.backends.length} backend{modelConfig.backends.length !== 1 ? 's' : ''})
+                        </span>
+                        <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEditingModel(modelConfig)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => {
+                              if (confirm(`Delete model ${modelConfig.model} and all its backends?`)) {
+                                deleteModel(modelConfig.model);
+                              }
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
                   {/* Backends table (expanded) */}
                   {isExpanded && (
-                    <div className="p-4">
+                    <div className="p-4 bg-white border-t">
                       {modelConfig.backends.length === 0 ? (
                         <p className="text-sm text-gray-500 mb-3">No backends configured for this model.</p>
                       ) : (
@@ -186,25 +190,27 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                                     onCheckedChange={(checked) => updateEnabled(modelConfig.model, backend.id, checked)}
                                   />
                                 </TableCell>
-                                <TableCell className="space-x-2">
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setEditingBackend({ model: modelConfig.model, backend })}
-                                  >
-                                    Edit
-                                  </Button>
-                                  <Button
-                                    variant="destructive"
-                                    size="sm"
-                                    onClick={() => {
-                                      if (confirm(`Delete backend ${backend.id}?`)) {
-                                        deleteBackend(modelConfig.model, backend.id);
-                                      }
-                                    }}
-                                  >
-                                    Delete
-                                  </Button>
+                                <TableCell>
+                                  <div className="inline-flex gap-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setEditingBackend({ model: modelConfig.model, backend })}
+                                    >
+                                      Edit
+                                    </Button>
+                                    <Button
+                                      variant="destructive"
+                                      size="sm"
+                                      onClick={() => {
+                                        if (confirm(`Delete backend ${backend.id}?`)) {
+                                          deleteBackend(modelConfig.model, backend.id);
+                                        }
+                                      }}
+                                    >
+                                      Delete
+                                    </Button>
+                                  </div>
                                 </TableCell>
                               </TableRow>
                             ))}
@@ -213,7 +219,7 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                       )}
                       <div className="mt-3">
                         <Button variant="outline" size="sm" onClick={() => setAddingBackendFor(modelConfig.model)}>
-                          + Add Backend to {modelConfig.model}
+                          + Add Backend
                         </Button>
                       </div>
                     </div>
@@ -221,9 +227,8 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                 </div>
               );
             })}
-          </div>
-        )}
-      </CardContent>
+        </div>
+      )}
 
       <AddModelDialog open={addModelOpen} onOpenChange={setAddModelOpen} onAdded={load} />
       <EditModelDialog
@@ -254,6 +259,6 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
           load();
         }}
       />
-    </Card>
+    </div>
   );
 }

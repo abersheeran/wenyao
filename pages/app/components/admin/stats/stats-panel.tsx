@@ -1,7 +1,6 @@
 import * as React from "react";
 import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Switch } from "../../ui/switch";
 import { useAdminApi, type StatsDataPoint } from "~/apis";
@@ -61,56 +60,52 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   }, [timeRange, autoRefresh]);
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle>历史趋势（多实例聚合）</CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">
-              数据每 15 秒更新一次，显示所有实例的聚合结果
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Select value={timeRange} onValueChange={(v) => setTimeRange(v)}>
-              <SelectTrigger className="text-sm w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1h">过去 1 小时</SelectItem>
-                <SelectItem value="6h">过去 6 小时</SelectItem>
-                <SelectItem value="24h">过去 24 小时</SelectItem>
-                <SelectItem value="7d">过去 7 天</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="outline" onClick={loadHistory} disabled={historyState.loading}>
-              刷新
-            </Button>
-            <div className="flex items-center gap-2 ml-1">
-              <Switch
-                checked={autoRefresh}
-                onCheckedChange={setAutoRefresh}
-              />
-              <span className="text-xs text-muted-foreground">
-                自动刷新
-              </span>
-            </div>
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold">历史趋势（多实例聚合）</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            数据每 15 秒更新一次，显示所有实例的聚合结果
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Select value={timeRange} onValueChange={(v) => setTimeRange(v)}>
+            <SelectTrigger className="text-sm w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1h">过去 1 小时</SelectItem>
+              <SelectItem value="6h">过去 6 小时</SelectItem>
+              <SelectItem value="24h">过去 24 小时</SelectItem>
+              <SelectItem value="7d">过去 7 天</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button variant="outline" onClick={loadHistory} disabled={historyState.loading}>
+            刷新
+          </Button>
+          <div className="flex items-center gap-2 ml-1">
+            <Switch
+              checked={autoRefresh}
+              onCheckedChange={setAutoRefresh}
+            />
+            <span className="text-xs text-muted-foreground">
+              自动刷新
+            </span>
           </div>
         </div>
-      </CardHeader>
-      <CardContent>
-        {historyState.error && (
-          <p className="text-sm text-red-600 mb-2">{historyState.error.message}</p>
-        )}
-        {historyState.loading ? (
-          <p className="text-sm text-gray-500">加载中...</p>
-        ) : Object.keys(historyData).length === 0 ? (
-          <p className="text-sm text-gray-500">暂无历史数据</p>
-        ) : (
-          <div className="space-y-8">
-            <HistoricalCharts historyData={historyData} />
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      </div>
+      {historyState.error && (
+        <p className="text-sm text-red-600 mb-2">{historyState.error.message}</p>
+      )}
+      {historyState.loading ? (
+        <p className="text-sm text-gray-500">加载中...</p>
+      ) : Object.keys(historyData).length === 0 ? (
+        <p className="text-sm text-gray-500">暂无历史数据</p>
+      ) : (
+        <div className="space-y-8">
+          <HistoricalCharts historyData={historyData} />
+        </div>
+      )}
+    </div>
   );
 }

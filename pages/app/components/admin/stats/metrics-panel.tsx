@@ -1,7 +1,6 @@
 import * as React from "react";
 import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import { useAdminApi } from "~/apis";
 
 export function MetricsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
@@ -29,28 +28,26 @@ export function MetricsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   }, []);
 
   return (
-    <Card>
-      <CardHeader className="flex items-center justify-between">
-        <CardTitle>Prometheus Metrics</CardTitle>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">Prometheus Metrics</h2>
         <Button variant="outline" onClick={load} disabled={loadState.loading || isDisabled}>
           Refresh
         </Button>
-      </CardHeader>
-      <CardContent>
-        {loadState.error && <p className="text-sm text-red-600 mb-2">{loadState.error.message}</p>}
-        {isDisabled ? (
-          <div className="text-sm text-gray-500 p-4 bg-yellow-50 border border-yellow-200 rounded">
-            <p className="font-medium mb-2">Metrics Collection Disabled</p>
-            <p>To enable metrics, set <code className="bg-gray-100 px-1 py-0.5 rounded">ENABLE_METRICS=true</code> in your server configuration and restart.</p>
-          </div>
-        ) : loadState.loading ? (
-          <p className="text-sm text-gray-500">Loading...</p>
-        ) : text ? (
-          <pre className="text-xs whitespace-pre-wrap bg-gray-50 p-3 rounded border border-gray-200 overflow-auto max-h-[60vh]">{text}</pre>
-        ) : (
-          <p className="text-sm text-gray-500">No metrics available</p>
-        )}
-      </CardContent>
-    </Card>
+      </div>
+      {loadState.error && <p className="text-sm text-red-600 mb-2">{loadState.error.message}</p>}
+      {isDisabled ? (
+        <div className="text-sm text-gray-500 p-4 bg-yellow-50 border border-yellow-200 rounded">
+          <p className="font-medium mb-2">Metrics Collection Disabled</p>
+          <p>To enable metrics, set <code className="bg-gray-100 px-1 py-0.5 rounded">ENABLE_METRICS=true</code> in your server configuration and restart.</p>
+        </div>
+      ) : loadState.loading ? (
+        <p className="text-sm text-gray-500">Loading...</p>
+      ) : text ? (
+        <pre className="text-xs whitespace-pre-wrap bg-gray-50 p-3 rounded border border-gray-200 overflow-auto max-h-[60vh]">{text}</pre>
+      ) : (
+        <p className="text-sm text-gray-500">No metrics available</p>
+      )}
+    </div>
   );
 }

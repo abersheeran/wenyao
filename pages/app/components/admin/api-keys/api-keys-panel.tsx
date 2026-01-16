@@ -1,7 +1,6 @@
 import * as React from "react";
 import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import {
   Table,
   TableHeader,
@@ -56,22 +55,21 @@ export function ApiKeysPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   };
 
   return (
-    <Card>
-      <CardHeader className="flex items-center justify-between">
-        <CardTitle>API Keys</CardTitle>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">API Keys</h2>
         <Button onClick={() => setAddApiKeyOpen(true)}>Add API Key</Button>
-      </CardHeader>
-      <CardContent>
-        {(listState.error || deleteState.error) && (
-          <p className="text-sm text-red-600 mb-2">
-            {(listState.error || deleteState.error)?.message}
-          </p>
-        )}
-        {listState.loading ? (
-          <p className="text-sm text-gray-500">Loading...</p>
-        ) : apiKeys.length === 0 ? (
-          <p className="text-sm text-gray-500">No API keys configured.</p>
-        ) : (
+      </div>
+      {(listState.error || deleteState.error) && (
+        <p className="text-sm text-red-600 mb-2">
+          {(listState.error || deleteState.error)?.message}
+        </p>
+      )}
+      {listState.loading ? (
+        <p className="text-sm text-gray-500">Loading...</p>
+      ) : apiKeys.length === 0 ? (
+        <p className="text-sm text-gray-500">No API keys configured.</p>
+      ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -131,9 +129,8 @@ export function ApiKeysPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
-        )}
-      </CardContent>
+        </Table>
+      )}
 
       <AddApiKeyDialog
         open={addApiKeyOpen}
@@ -151,6 +148,6 @@ export function ApiKeysPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
           load();
         }}
       />
-    </Card>
+    </div>
   );
 }

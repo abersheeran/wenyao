@@ -1,7 +1,6 @@
 import * as React from "react";
 import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import {
   Table,
   TableHeader,
@@ -113,33 +112,31 @@ export function AffinityPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>亲和性映射管理 (Affinity Mappings)</span>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={load}
-                disabled={listState.loading}
-              >
-                <RefreshCcw className="w-4 h-4 mr-1" />
-                刷新
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={clearMappings}
-                disabled={clearState.loading || (!filterModel && !filterBackendId)}
-              >
-                <Trash2 className="w-4 h-4 mr-1" />
-                批量清除
-              </Button>
-            </div>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">亲和性映射管理 (Affinity Mappings)</h2>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={load}
+              disabled={listState.loading}
+            >
+              <RefreshCcw className="w-4 h-4 mr-1" />
+              刷新
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={clearMappings}
+              disabled={clearState.loading || (!filterModel && !filterBackendId)}
+            >
+              <Trash2 className="w-4 h-4 mr-1" />
+              批量清除
+            </Button>
+          </div>
+        </div>
+        <div>
           {/* Filters */}
           <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
@@ -274,22 +271,20 @@ export function AffinityPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
               )}
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      {/* Help Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">使用说明</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-gray-600 space-y-2">
+      {/* Help Section */}
+      <div className="border rounded-lg p-4 bg-gray-50">
+        <h3 className="text-base font-semibold mb-3">使用说明</h3>
+        <div className="text-sm text-gray-600 space-y-2">
           <p>• <strong>亲和性映射</strong>：记录了哪个 session ID 被路由到哪个 backend</p>
           <p>• <strong>自动清理</strong>：超过 1 小时未访问的映射会被自动删除</p>
           <p>• <strong>启用方式</strong>：在模型配置中启用 "后端亲和性" 选项</p>
           <p>• <strong>客户端使用</strong>：在请求头中添加 <code className="px-1 py-0.5 bg-gray-100 rounded">X-Session-ID</code> 即可</p>
           <p>• <strong>优先级</strong>：X-Backend-ID (强制) &gt; 亲和性 &gt; 负载均衡</p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
