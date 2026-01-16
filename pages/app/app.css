@@ -135,4 +135,25 @@ body {
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Prevent Radix UI modal from causing layout shift */
+  html {
+    overflow-y: scroll !important;
+    width: 100vw !important;
+  }
+
+  body {
+    padding-right: 0 !important;
+    margin-right: 0 !important;
+    width: 100% !important;
+    position: relative !important;
+  }
+
+  /* Ensure body doesn't get scroll-locked styles from Radix UI */
+  body[data-scroll-locked] {
+    padding-right: 0 !important;
+    margin-right: 0 !important;
+    overflow-y: scroll !important;
+    position: relative !important;
+  }
 }

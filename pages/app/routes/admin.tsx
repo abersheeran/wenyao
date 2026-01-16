@@ -8,6 +8,13 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
+import { ChevronDown } from "lucide-react";
 import { useAdminApi } from "~/apis";
 import { BackendsPanel } from "../components/admin/backends/backends-panel";
 import { ApiKeysPanel } from "../components/admin/api-keys/api-keys-panel";
@@ -54,11 +61,51 @@ export default function Admin() {
     setShowApiKeyDialog(true);
   };
 
+  const tabOptions = [
+    { value: "backends", label: "Backends" },
+    { value: "apikeys", label: "API Keys" },
+    { value: "affinity", label: "Affinity" },
+    { value: "stats", label: "Stats" },
+    { value: "metrics", label: "Metrics" },
+  ];
+
   return (
     <main className="container mx-auto p-4 space-y-4">
-      <header className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Admin</h1>
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
+          <h1 className="text-xl font-semibold">Admin</h1>
+          {hasApiKey && (
+            <Button variant="outline" size="sm" onClick={handleClearApiKey}>
+              退出登录
+            </Button>
+          )}
+        </div>
+
+        {/* 小屏幕：下拉选择 */}
+        <div className="sm:hidden">
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="w-full justify-between">
+                {tabOptions.find((option) => option.value === tab)?.label}
+                <ChevronDown className="ml-2 h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
+              {tabOptions.map((option) => (
+                <DropdownMenuItem
+                  key={option.value}
+                  onClick={() => setTab(option.value)}
+                  className={tab === option.value ? "bg-accent" : ""}
+                >
+                  {option.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        {/* 大屏幕：Tabs */}
+        <div className="hidden sm:flex items-center gap-4">
           <Tabs value={tab} onValueChange={(v) => setTab(v)}>
             <TabsList>
               <TabsTrigger value="backends">Backends</TabsTrigger>
@@ -68,11 +115,6 @@ export default function Admin() {
               <TabsTrigger value="metrics">Metrics</TabsTrigger>
             </TabsList>
           </Tabs>
-          {hasApiKey && (
-            <Button variant="outline" size="sm" onClick={handleClearApiKey}>
-              更换密钥
-            </Button>
-          )}
         </div>
       </header>
 
