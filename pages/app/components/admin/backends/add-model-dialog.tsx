@@ -13,9 +13,10 @@ import { useAdminApi, type LoadBalancingStrategy, type MinErrorRateOptions } fro
 
 export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (v: boolean) => void; onAdded: () => void; }) {
   const api = useAdminApi();
-  const [form, setForm] = React.useState<{ model: string; loadBalancingStrategy: LoadBalancingStrategy; minErrorRateOptions?: MinErrorRateOptions }>({
+  const [form, setForm] = React.useState<{ model: string; loadBalancingStrategy: LoadBalancingStrategy; enableAffinity?: boolean; minErrorRateOptions?: MinErrorRateOptions }>({
     model: "",
-    loadBalancingStrategy: "weighted"
+    loadBalancingStrategy: "weighted",
+    enableAffinity: false
   });
   const [minErrorRateOpts, setMinErrorRateOpts] = React.useState<MinErrorRateOptions>({
     minRequests: 20,
@@ -30,7 +31,7 @@ export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean;
       ...form,
       minErrorRateOptions: form.loadBalancingStrategy === 'min-error-rate' ? minErrorRateOpts : undefined
     });
-    setForm({ model: "", loadBalancingStrategy: "weighted" });
+    setForm({ model: "", loadBalancingStrategy: "weighted", enableAffinity: false });
     setMinErrorRateOpts({ minRequests: 20, circuitBreakerThreshold: 0.9, epsilon: 0.001, timeWindowMinutes: 15 });
     onOpenChange(false);
     onAdded();
@@ -72,6 +73,22 @@ export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean;
               {form.loadBalancingStrategy === 'weighted' && '根据配置的权重分配流量'}
               {form.loadBalancingStrategy === 'lowest-ttft' && '选择平均首token时间最低的后端'}
               {form.loadBalancingStrategy === 'min-error-rate' && '根据错误率动态调整流量分配'}
+            </p>
+          </div>
+
+          {/* Enable Affinity Option */}
+          <div className="border rounded-lg p-4 space-y-2 bg-gray-50">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.enableAffinity || false}
+                onChange={(e) => setForm({ ...form, enableAffinity: e.target.checked })}
+                className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium">启用后端亲和性 (Enable Backend Affinity)</span>
+            </label>
+            <p className="text-xs text-gray-500 ml-6">
+              启用后，相同 X-Session-ID 的请求会被路由到同一个后端，用于复用 KV 缓存
             </p>
           </div>
 

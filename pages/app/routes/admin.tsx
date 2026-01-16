@@ -13,6 +13,7 @@ import { BackendsPanel } from "../components/admin/backends/backends-panel";
 import { ApiKeysPanel } from "../components/admin/api-keys/api-keys-panel";
 import { StatsPanel } from "../components/admin/stats/stats-panel";
 import { MetricsPanel } from "../components/admin/stats/metrics-panel";
+import { AffinityPanel } from "../components/admin/affinity/affinity-panel";
 
 export function meta() {
   return [
@@ -62,6 +63,7 @@ export default function Admin() {
             <TabsList>
               <TabsTrigger value="backends">Backends</TabsTrigger>
               <TabsTrigger value="apikeys">API Keys</TabsTrigger>
+              <TabsTrigger value="affinity">Affinity</TabsTrigger>
               <TabsTrigger value="stats">Stats</TabsTrigger>
               <TabsTrigger value="metrics">Metrics</TabsTrigger>
             </TabsList>
@@ -104,6 +106,7 @@ export default function Admin() {
 
       {tab === "backends" && <BackendsPanel api={api} />}
       {tab === "apikeys" && <ApiKeysPanel api={api} />}
+      {tab === "affinity" && <AffinityPanel api={api} />}
       {tab === "stats" && <StatsPanel api={api} />}
       {tab === "metrics" && <MetricsPanel api={api} />}
     </main>

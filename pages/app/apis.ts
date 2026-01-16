@@ -24,6 +24,7 @@ export type ModelConfig = {
   backends: BackendConfig[];
   loadBalancingStrategy: LoadBalancingStrategy;
   minErrorRateOptions?: MinErrorRateOptions;
+  enableAffinity?: boolean;
 };
 
 export type BackendStats = {
@@ -74,6 +75,15 @@ export type RecordedRequest = {
   url: string;
   headers: Record<string, string>;
   body: string;
+};
+
+export type AffinityMapping = {
+  model: string;
+  sessionId: string;
+  backendId: string;
+  createdAt: string | Date;
+  lastAccessedAt: string | Date;
+  accessCount: number;
 };
 
 /**
@@ -350,6 +360,78 @@ export function useAdminApi() {
       if (!res.ok) {
         const error = await res.json();
         throw new Error(error.error || "Failed to delete recorded requests");
+      }
+      return await res.json();
+    },
+
+    // ===== Affinity Management APIs =====
+
+    async listAffinityMappings(params?: {
+      model?: string;
+      backendId?: string;
+      limit?: number;
+      offset?: number;
+    }): Promise<{ mappings: AffinityMapping[]; total: number; limit: number; offset: number }> {
+      const queryParams = new URLSearchParams();
+      if (params?.model) queryParams.append('model', params.model);
+      if (params?.backendId) queryParams.append('backendId', params.backendId);
+      if (params?.limit !== undefined) queryParams.append('limit', params.limit.toString());
+      if (params?.offset !== undefined) queryParams.append('offset', params.offset.toString());
+
+      const url = `${base}/affinity${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+      const res = await fetch(url, {
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to fetch affinity mappings");
+      }
+      return await res.json();
+    },
+
+    async getAffinityMapping(model: string, sessionId: string): Promise<{ model: string; sessionId: string; backendId: string }> {
+      const url = `${base}/affinity/${encodeURIComponent(model)}/${encodeURIComponent(sessionId)}`;
+      const res = await fetch(url, {
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to fetch affinity mapping");
+      }
+      return await res.json();
+    },
+
+    async deleteAffinityMapping(model: string, sessionId: string): Promise<{ message: string }> {
+      const url = `${base}/affinity/${encodeURIComponent(model)}/${encodeURIComponent(sessionId)}`;
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to delete affinity mapping");
+      }
+      return await res.json();
+    },
+
+    async clearAffinityMappings(filter: {
+      model?: string;
+      sessionId?: string;
+      backendId?: string;
+    }): Promise<{ message: string; deletedCount: number }> {
+      const queryParams = new URLSearchParams();
+      if (filter.model) queryParams.append('model', filter.model);
+      if (filter.sessionId) queryParams.append('sessionId', filter.sessionId);
+      if (filter.backendId) queryParams.append('backendId', filter.backendId);
+
+      const url = `${base}/affinity${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to clear affinity mappings");
       }
       return await res.json();
     }

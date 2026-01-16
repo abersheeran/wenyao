@@ -19,6 +19,7 @@ export function EditModelDialog({ open, onOpenChange, model, onSaved }: {
 }) {
   const api = useAdminApi();
   const [strategy, setStrategy] = React.useState<LoadBalancingStrategy>("weighted");
+  const [enableAffinity, setEnableAffinity] = React.useState<boolean>(false);
   const [minErrorRateOpts, setMinErrorRateOpts] = React.useState<MinErrorRateOptions>({
     minRequests: 20,
     circuitBreakerThreshold: 0.9,
@@ -29,6 +30,7 @@ export function EditModelDialog({ open, onOpenChange, model, onSaved }: {
   React.useEffect(() => {
     if (model) {
       setStrategy(model.loadBalancingStrategy);
+      setEnableAffinity(model.enableAffinity || false);
       // Load existing options or use defaults
       setMinErrorRateOpts({
         minRequests: model.minErrorRateOptions?.minRequests ?? 20,
@@ -44,10 +46,11 @@ export function EditModelDialog({ open, onOpenChange, model, onSaved }: {
     if (!model) return;
     await api.updateModel(model.model, {
       loadBalancingStrategy: strategy,
+      enableAffinity: enableAffinity,
       minErrorRateOptions: strategy === 'min-error-rate' ? minErrorRateOpts : undefined
     });
     onSaved();
-  }, [api, model, strategy, minErrorRateOpts, onSaved]);
+  }, [api, model, strategy, enableAffinity, minErrorRateOpts, onSaved]);
 
   if (!model) return null;
 
@@ -80,6 +83,22 @@ export function EditModelDialog({ open, onOpenChange, model, onSaved }: {
               {strategy === 'weighted' && '根据配置的权重分配流量'}
               {strategy === 'lowest-ttft' && '选择平均首token时间最低的后端'}
               {strategy === 'min-error-rate' && '根据错误率动态调整流量分配'}
+            </p>
+          </div>
+
+          {/* Enable Affinity Option */}
+          <div className="border rounded-lg p-4 space-y-2 bg-gray-50">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enableAffinity}
+                onChange={(e) => setEnableAffinity(e.target.checked)}
+                className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium">启用后端亲和性 (Enable Backend Affinity)</span>
+            </label>
+            <p className="text-xs text-gray-500 ml-6">
+              启用后，相同 X-Session-ID 的请求会被路由到同一个后端，用于复用 KV 缓存
             </p>
           </div>
 
