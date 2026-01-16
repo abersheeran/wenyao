@@ -33,9 +33,18 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
         startTime = new Date(now.getTime() - 60 * 60 * 1000);
     }
 
-    const data = await api.getAllHistoricalStats(startTime, now);
-    setHistoryData(data);
-    return data;
+    try {
+      const data = await api.getAllHistoricalStats(startTime, now);
+      setHistoryData(data);
+      return data;
+    } catch (error: any) {
+      // Handle metrics disabled (503) gracefully
+      if (error.message?.includes('503') || error.message?.includes('disabled')) {
+        setHistoryData({});
+        throw new Error('指标收集已禁用。请在服务器配置中启用 ENABLE_METRICS=true');
+      }
+      throw error;
+    }
   }, [api, timeRange]);
 
   React.useEffect(() => {

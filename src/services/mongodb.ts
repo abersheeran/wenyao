@@ -1,5 +1,5 @@
 import { MongoClient, Db, ChangeStream, Collection } from 'mongodb'
-import type { ModelConfig, StatsDataPoint, RecordedRequest } from '../types/backend.js'
+import type { ModelConfig, StatsDataPoint, RecordedRequest, AffinityMapping } from '../types/backend.js'
 import type { ApiKey } from '../types/apikey.js'
 
 export class MongoDBService {
@@ -22,11 +22,14 @@ export class MongoDBService {
       // Create unique index on API key
       await this.getApiKeysCollection().createIndex({ key: 1 }, { unique: true })
 
-      // Initialize stats history collection
-      await this.initializeStatsHistoryCollection()
+      // Note: The request_metrics collection is now initialized by MetricsStorage
+      // in src/services/metrics/storage.ts when metrics are enabled
 
       // Initialize recorded requests collection
       await this.initializeRecordedRequestsCollection()
+
+      // Initialize affinity mappings collection
+      await this.initializeAffinityMappingsCollection()
     } catch (error) {
       console.error('Failed to connect to MongoDB:', error)
       throw error
@@ -64,7 +67,9 @@ export class MongoDBService {
     return this.getDatabase().collection('backends')
   }
 
-  // Stats history collection
+  // DEPRECATED: Stats history collection (replaced by request_metrics)
+  // This is kept for backward compatibility but is no longer actively used
+  // New metrics system uses the 'request_metrics' collection via MetricsStorage
   getStatsHistoryCollection(): Collection<StatsDataPoint> {
     return this.getDatabase().collection<StatsDataPoint>('stats_history')
   }
@@ -79,7 +84,14 @@ export class MongoDBService {
     return this.getDatabase().collection<RecordedRequest>('recorded_requests')
   }
 
-  // Initialize stats history collection with indexes
+  // Affinity mappings collection
+  getAffinityMappingsCollection(): Collection<AffinityMapping> {
+    return this.getDatabase().collection<AffinityMapping>('affinity_mappings')
+  }
+
+  // DEPRECATED: Initialize stats history collection with indexes
+  // This collection is no longer used by the new metrics system
+  // Kept for backward compatibility only
   async initializeStatsHistoryCollection(): Promise<void> {
     const collection = this.getStatsHistoryCollection()
 
@@ -98,7 +110,7 @@ export class MongoDBService {
       { expireAfterSeconds: 7 * 24 * 60 * 60 } // 7 days in seconds
     )
 
-    console.log('Stats history collection initialized with indexes')
+    console.log('Stats history collection initialized with indexes (DEPRECATED)')
   }
 
   // Initialize recorded requests collection with indexes
@@ -115,6 +127,25 @@ export class MongoDBService {
     await collection.createIndex({ timestamp: -1 })
 
     console.log('Recorded requests collection initialized with indexes')
+  }
+
+  // Initialize affinity mappings collection with indexes
+  async initializeAffinityMappingsCollection(): Promise<void> {
+    const collection = this.getAffinityMappingsCollection()
+
+    // Compound unique index for model + sessionId lookups (primary use case)
+    await collection.createIndex({ model: 1, sessionId: 1 }, { unique: true })
+
+    // Index for backend cleanup queries
+    await collection.createIndex({ backendId: 1 })
+
+    // TTL index to auto-delete stale mappings (1 hour of inactivity)
+    await collection.createIndex(
+      { lastAccessedAt: 1 },
+      { expireAfterSeconds: 3600 } // 1 hour in seconds
+    )
+
+    console.log('Affinity mappings collection initialized with indexes')
   }
 
   async watchModels(

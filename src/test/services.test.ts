@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest'
 import { ConfigManager } from '../services/config-manager.js'
-import { StatsTracker } from '../services/stats-tracker.js'
 import { LoadBalancer } from '../services/load-balancer.js'
+import { createMetricsCollector } from '../services/metrics/index.js'
+import type { MetricsCollector } from '../services/metrics/index.js'
 import type { BackendConfig, ModelConfig } from '../types/backend.js'
+import { MongoClient, Db } from 'mongodb'
 
 describe('ConfigManager', () => {
   let configManager: ConfigManager
@@ -94,125 +96,214 @@ describe('ConfigManager', () => {
   })
 })
 
-describe('StatsTracker', () => {
-  let statsTracker: StatsTracker
+describe('MetricsCollector', () => {
+  let metricsCollector: MetricsCollector
+  let mongoClient: MongoClient | null = null
+  let db: Db | null = null
 
-  beforeEach(() => {
-    statsTracker = new StatsTracker()
+  beforeAll(async () => {
+    // Try to connect to MongoDB for metrics tests
+    if (process.env.MONGODB_URL) {
+      try {
+        mongoClient = new MongoClient(process.env.MONGODB_URL)
+        await mongoClient.connect()
+        db = mongoClient.db()
+        console.log('Connected to MongoDB for metrics tests')
+      } catch (error) {
+        console.warn('MongoDB not available for metrics tests:', error)
+      }
+    }
+  })
+
+  afterAll(async () => {
+    if (mongoClient) {
+      await mongoClient.close()
+    }
+  })
+
+  beforeEach(async () => {
+    // Create metrics collector (will use NoopCollector if MongoDB not available)
+    metricsCollector = await createMetricsCollector({
+      enabled: !!db,
+      db: db || undefined
+    })
+
+    // Clear metrics if using database
+    if (metricsCollector.isEnabled()) {
+      await metricsCollector.resetStats()
+    }
   })
 
   it('should start with no stats', async () => {
-    const stats = await statsTracker.getAllStats()
-    expect(stats).toEqual([])
+    const now = new Date()
+    const oneSecondAgo = new Date(now.getTime() - 1000)
+    const stats = await metricsCollector.getAllStats({ startTime: oneSecondAgo, endTime: now })
+    expect(Array.from(stats.values())).toEqual([])
   })
 
   it('should record a successful request', async () => {
-    statsTracker.recordSuccess('backend-1', 100, 1000, true)
+    if (!metricsCollector.isEnabled()) {
+      console.log('Skipping test: metrics disabled')
+      return
+    }
 
-    const stats = await statsTracker.getStats('backend-1')
-    expect(stats?.totalRequests).toBe(1)
-    expect(stats?.successfulRequests).toBe(1)
-    expect(stats?.failedRequests).toBe(0)
-    expect(stats?.successRate).toBe(1)
-    expect(stats?.averageStreamingTTFT).toBe(100)
-    expect(stats?.averageNonStreamingTTFT).toBe(0)
+    metricsCollector.recordRequestStart('backend-1', 'req-1')
+    await metricsCollector.recordRequestComplete({
+      backendId: 'backend-1',
+      requestId: 'req-1',
+      status: 'success',
+      duration: 1000,
+      ttft: 100,
+      streamType: 'streaming',
+      model: 'gpt-4'
+    })
+
+    // Wait a bit for async write
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const stats = await metricsCollector.getRecentStats('backend-1', 5000)
+    expect(stats.totalRequests).toBe(1)
+    expect(stats.successfulRequests).toBe(1)
+    expect(stats.failedRequests).toBe(0)
+    expect(stats.successRate).toBe(1)
+    expect(stats.averageStreamingTTFT).toBeGreaterThan(0)
   })
 
   it('should record a failed request', async () => {
-    statsTracker.recordFailure('backend-1')
+    if (!metricsCollector.isEnabled()) {
+      console.log('Skipping test: metrics disabled')
+      return
+    }
 
-    const stats = await statsTracker.getStats('backend-1')
-    expect(stats?.totalRequests).toBe(1)
-    expect(stats?.successfulRequests).toBe(0)
-    expect(stats?.failedRequests).toBe(1)
-    expect(stats?.successRate).toBe(0)
+    metricsCollector.recordRequestStart('backend-1', 'req-2')
+    await metricsCollector.recordRequestComplete({
+      backendId: 'backend-1',
+      requestId: 'req-2',
+      status: 'failure',
+      duration: 500,
+      model: 'gpt-4',
+      errorType: 'network_error'
+    })
+
+    // Wait a bit for async write
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const stats = await metricsCollector.getRecentStats('backend-1', 5000)
+    expect(stats.totalRequests).toBe(1)
+    expect(stats.successfulRequests).toBe(0)
+    expect(stats.failedRequests).toBe(1)
+    expect(stats.successRate).toBe(0)
   })
 
   it('should calculate average streaming TTFT correctly', async () => {
-    statsTracker.recordSuccess('backend-1', 100, 1000, true)
-    statsTracker.recordSuccess('backend-1', 200, 1000, true)
-    statsTracker.recordSuccess('backend-1', 150, 1000, true)
+    if (!metricsCollector.isEnabled()) {
+      console.log('Skipping test: metrics disabled')
+      return
+    }
 
-    const stats = await statsTracker.getStats('backend-1')
-    expect(stats?.averageStreamingTTFT).toBeCloseTo(150, 1)
-  })
+    const requests = [
+      { ttft: 100, requestId: 'req-3' },
+      { ttft: 200, requestId: 'req-4' },
+      { ttft: 150, requestId: 'req-5' }
+    ]
 
-  it('should calculate average non-streaming TTFT correctly', async () => {
-    statsTracker.recordSuccess('backend-2', 50, 1000, false)
-    statsTracker.recordSuccess('backend-2', 100, 1000, false)
-    statsTracker.recordSuccess('backend-2', 75, 1000, false)
+    for (const req of requests) {
+      metricsCollector.recordRequestStart('backend-1', req.requestId)
+      await metricsCollector.recordRequestComplete({
+        backendId: 'backend-1',
+        requestId: req.requestId,
+        status: 'success',
+        duration: 1000,
+        ttft: req.ttft,
+        streamType: 'streaming',
+        model: 'gpt-4'
+      })
+    }
 
-    const stats = await statsTracker.getStats('backend-2')
-    expect(stats?.averageNonStreamingTTFT).toBeCloseTo(75, 1)
-  })
+    // Wait a bit for async writes
+    await new Promise(resolve => setTimeout(resolve, 200))
 
-  it('should handle undefined isStream as non-streaming', async () => {
-    statsTracker.recordSuccess('backend-3', 80, 1000)
-
-    const stats = await statsTracker.getStats('backend-3')
-    expect(stats?.averageNonStreamingTTFT).toBe(80)
-    expect(stats?.averageStreamingTTFT).toBe(0)
+    const stats = await metricsCollector.getRecentStats('backend-1', 5000)
+    expect(stats.averageStreamingTTFT).toBeCloseTo(150, 0)
   })
 
   it('should calculate success rate correctly', async () => {
-    statsTracker.recordSuccess('backend-1')
-    statsTracker.recordSuccess('backend-1')
-    statsTracker.recordFailure('backend-1')
-    statsTracker.recordSuccess('backend-1')
-
-    const stats = await statsTracker.getStats('backend-1')
-    expect(stats?.totalRequests).toBe(4)
-    expect(stats?.successfulRequests).toBe(3)
-    expect(stats?.failedRequests).toBe(1)
-    expect(stats?.successRate).toBe(0.75)
-  })
-
-  it('should limit TTFT samples to prevent memory bloat', async () => {
-    // Record more than MAX_TTFT_SAMPLES (100)
-    for (let i = 0; i < 150; i++) {
-      statsTracker.recordSuccess('backend-1', i)
+    if (!metricsCollector.isEnabled()) {
+      console.log('Skipping test: metrics disabled')
+      return
     }
 
-    const stats = await statsTracker.getStats('backend-1')
-    // With Prometheus, all samples are counted (not limited like before)
-    // Just verify we got stats
-    expect(stats?.totalRequests).toBe(150)
+    const requests = [
+      { status: 'success' as const, requestId: 'req-6' },
+      { status: 'success' as const, requestId: 'req-7' },
+      { status: 'failure' as const, requestId: 'req-8' },
+      { status: 'success' as const, requestId: 'req-9' }
+    ]
+
+    for (const req of requests) {
+      metricsCollector.recordRequestStart('backend-1', req.requestId)
+      await metricsCollector.recordRequestComplete({
+        backendId: 'backend-1',
+        requestId: req.requestId,
+        status: req.status,
+        duration: 1000,
+        model: 'gpt-4'
+      })
+    }
+
+    // Wait a bit for async writes
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    const stats = await metricsCollector.getRecentStats('backend-1', 5000)
+    expect(stats.totalRequests).toBe(4)
+    expect(stats.successfulRequests).toBe(3)
+    expect(stats.failedRequests).toBe(1)
+    expect(stats.successRate).toBeCloseTo(0.75, 2)
   })
 
   it('should reset stats for a backend', async () => {
-    statsTracker.recordSuccess('backend-1', 100)
-    statsTracker.resetStats('backend-1')
+    if (!metricsCollector.isEnabled()) {
+      console.log('Skipping test: metrics disabled')
+      return
+    }
 
-    // Prometheus doesn't support individual resets, so stats will still exist
-    const stats = await statsTracker.getStats('backend-1')
-    expect(stats).toBeDefined()
+    metricsCollector.recordRequestStart('backend-1', 'req-10')
+    await metricsCollector.recordRequestComplete({
+      backendId: 'backend-1',
+      requestId: 'req-10',
+      status: 'success',
+      duration: 1000,
+      model: 'gpt-4'
+    })
+
+    // Wait a bit for async write
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const deletedCount = await metricsCollector.resetStats('backend-1')
+    expect(deletedCount).toBeGreaterThan(0)
+
+    const stats = await metricsCollector.getRecentStats('backend-1', 5000)
+    expect(stats.totalRequests).toBe(0)
   })
 
-  it('should reset all stats', async () => {
-    statsTracker.recordSuccess('backend-1', 100)
-    statsTracker.recordSuccess('backend-2', 200)
-    statsTracker.resetAllStats()
+  it('should work when metrics disabled (NoopCollector)', async () => {
+    const noopCollector = await createMetricsCollector({
+      enabled: false
+    })
 
-    const stats = await statsTracker.getAllStats()
-    expect(stats).toEqual([])
-  })
+    expect(noopCollector.isEnabled()).toBe(false)
 
-  it('should include instance label in Prometheus metrics', async () => {
-    statsTracker.recordSuccess('backend-1', 100, 1500, true)
-    statsTracker.recordFailure('backend-2', 3000)
+    noopCollector.recordRequestStart('backend-1', 'req-11')
+    await noopCollector.recordRequestComplete({
+      backendId: 'backend-1',
+      requestId: 'req-11',
+      status: 'success',
+      duration: 1000,
+      model: 'gpt-4'
+    })
 
-    const metrics = await statsTracker.getMetrics()
-
-    // Verify metrics include instance label
-    expect(metrics).toContain('instance=')
-    expect(metrics).toContain('backend_id="backend-1"')
-    expect(metrics).toContain('backend_id="backend-2"')
-
-    // Verify all metric types include instance label
-    expect(metrics).toMatch(/llm_proxy_requests_total\{instance="[^"]+",backend_id="backend-1",status="success"\}/)
-    expect(metrics).toMatch(/llm_proxy_requests_total\{instance="[^"]+",backend_id="backend-2",status="failure"\}/)
-    expect(metrics).toMatch(/llm_proxy_ttft_seconds_sum\{instance="[^"]+",backend_id="backend-1",stream_type="streaming"\}/)
-    expect(metrics).toMatch(/llm_proxy_request_duration_seconds_sum\{instance="[^"]+",backend_id="backend-1",status="success"\}/)
+    const stats = await noopCollector.getRecentStats('backend-1', 5000)
+    expect(stats.totalRequests).toBe(0)
   })
 })
 

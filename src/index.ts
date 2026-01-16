@@ -6,8 +6,13 @@ import admin from './routes/admin.js'
 import proxy from './routes/proxy.js'
 import { mongoDBService } from './services/mongodb.js'
 import { configManager } from './services/config-manager.js'
-import { statsTracker } from './services/stats-tracker.js'
 import { instanceManager } from './services/instance-manager.js'
+import { loadBalancer } from './services/load-balancer.js'
+import { createMetricsCollector, validateMetricsRequirement } from './services/metrics/index.js'
+import type { MetricsCollector } from './services/metrics/index.js'
+
+// Global metrics collector instance
+let metricsCollector: MetricsCollector
 
 const app = new Hono()
 
@@ -20,7 +25,8 @@ app.get('/health', (c) => {
     service: 'OpenAI API Proxy',
     status: 'running',
     version: '1.0.0',
-    instanceId: instanceManager.getInstanceId()
+    instanceId: instanceManager.getInstanceId(),
+    metricsEnabled: metricsCollector?.isEnabled() ?? false
   })
 })
 
@@ -36,6 +42,9 @@ app.use('/*', serveStatic({ path: './pages/build/client/index.html' }))
 async function startServer() {
   const port = process.env.PORT ? parseInt(process.env.PORT) : 51818
 
+  // Determine if metrics should be enabled
+  const enableMetrics = process.env.ENABLE_METRICS !== 'false' // Default: true for backward compatibility
+
   // Try to connect to MongoDB if MONGODB_URL is provided
   if (process.env.MONGODB_URL) {
     console.log('Connecting to MongoDB...')
@@ -43,10 +52,38 @@ async function startServer() {
     await configManager.initializeFromMongoDB()
     console.log('MongoDB integration enabled')
 
-    // Start historical stats tracking (saves snapshot every 15 seconds)
-    statsTracker.startHistoryTracking()
+    // Initialize metrics collector
+    metricsCollector = await createMetricsCollector({
+      enabled: enableMetrics,
+      db: mongoDBService.getDatabase(),
+      instanceId: instanceManager.getInstanceId()
+    })
   } else {
     console.log('MONGODB_URL not provided, using in-memory storage')
+
+    // Without MongoDB, metrics cannot be enabled
+    if (enableMetrics) {
+      console.warn('Metrics require MongoDB. Metrics will be disabled.')
+    }
+    metricsCollector = await createMetricsCollector({
+      enabled: false
+    })
+  }
+
+  // Set metrics collector on load balancer
+  loadBalancer.setMetricsCollector(metricsCollector)
+
+  // Validate that all configured strategies are compatible with metrics settings
+  if (metricsCollector.isEnabled() === false) {
+    const models = configManager.getAllModels()
+    for (const model of models) {
+      try {
+        validateMetricsRequirement(model.loadBalancingStrategy, false)
+      } catch (error) {
+        console.error(`Configuration error for model '${model.model}':`, (error as Error).message)
+        process.exit(1)
+      }
+    }
   }
 
   // Start the HTTP server
@@ -63,17 +100,26 @@ async function startServer() {
   // Handle graceful shutdown
   process.on('SIGINT', async () => {
     console.log('\nShutting down gracefully...')
-    statsTracker.stopHistoryTracking()
+    if (metricsCollector) {
+      await metricsCollector.shutdown()
+    }
     await mongoDBService.disconnect()
     process.exit(0)
   })
 
   process.on('SIGTERM', async () => {
     console.log('\nShutting down gracefully...')
-    statsTracker.stopHistoryTracking()
+    if (metricsCollector) {
+      await metricsCollector.shutdown()
+    }
     await mongoDBService.disconnect()
     process.exit(0)
   })
+}
+
+// Export metrics collector for use in routes
+export function getMetricsCollector(): MetricsCollector {
+  return metricsCollector
 }
 
 startServer().catch((error) => {

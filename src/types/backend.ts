@@ -26,12 +26,23 @@ export interface MinErrorRateOptions {
   timeWindowMinutes?: number
 }
 
+// Affinity mapping - maps session IDs to backends for KV cache reuse
+export interface AffinityMapping {
+  model: string // Model name (part of compound key)
+  sessionId: string // Session ID from X-Session-ID header (part of compound key)
+  backendId: string // Target backend ID
+  createdAt: Date // When mapping was created
+  lastAccessedAt: Date // Last time this mapping was used (for TTL cleanup)
+  accessCount: number // Number of times accessed (monitoring metric)
+}
+
 // Model configuration - primary structure with model as unique key
 export interface ModelConfig {
   model: string // Primary key - the model name (e.g., "gpt-4", "claude-3-sonnet")
   backends: BackendConfig[] // Array of backend configurations for this model
   loadBalancingStrategy: LoadBalancingStrategy // Strategy for selecting backends
   minErrorRateOptions?: MinErrorRateOptions // Options for min-error-rate strategy
+  enableAffinity?: boolean // Enable session-based backend affinity for KV cache reuse
 }
 
 // Statistics for each backend

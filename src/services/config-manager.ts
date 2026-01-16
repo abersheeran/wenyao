@@ -1,5 +1,6 @@
 import type { ModelConfig, BackendConfig } from '../types/backend.js'
 import { mongoDBService } from './mongodb.js'
+import { affinityManager } from './affinity-manager.js'
 
 export class ConfigManager {
   private modelConfigs: Map<string, ModelConfig> = new Map()
@@ -139,11 +140,20 @@ export class ConfigManager {
       if (result.deletedCount && result.deletedCount > 0) {
         // Update in-memory immediately to avoid UI race with change stream
         this.modelConfigs.delete(model)
+
+        // Clean up affinity mappings for deleted model
+        await affinityManager.cleanupModelMappings(model)
+
         return true
       }
       return false
     } else {
-      return this.modelConfigs.delete(model)
+      const deleted = this.modelConfigs.delete(model)
+      if (deleted) {
+        // Clean up affinity mappings for deleted model
+        await affinityManager.cleanupModelMappings(model)
+      }
+      return deleted
     }
   }
 
@@ -216,6 +226,9 @@ export class ConfigManager {
     if (updatedBackends.length === modelConfig.backends.length) {
       throw new Error(`Backend with id ${backendId} not found in model ${model}`)
     }
+
+    // Clean up affinity mappings for deleted backend
+    await affinityManager.cleanupBackendMappings(backendId)
 
     // Allow empty backends array - user can add backends later
 

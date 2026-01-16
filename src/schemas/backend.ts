@@ -20,13 +20,15 @@ export const backendConfigSchema = z.object({
 export const createModelConfigSchema = z.object({
   model: z.string().min(1, 'Model name is required'),
   backends: z.array(backendConfigSchema).default([]), // Allow empty backends array
-  loadBalancingStrategy: loadBalancingStrategySchema.default('weighted')
+  loadBalancingStrategy: loadBalancingStrategySchema.default('weighted'),
+  enableAffinity: z.boolean().default(false).optional()
 })
 
 // Schema for updating a model configuration - all fields are optional
 export const updateModelConfigSchema = z.object({
   backends: z.array(backendConfigSchema).min(1, 'At least one backend is required').optional(),
-  loadBalancingStrategy: loadBalancingStrategySchema.optional()
+  loadBalancingStrategy: loadBalancingStrategySchema.optional(),
+  enableAffinity: z.boolean().optional()
 }).refine(
   (data) => Object.keys(data).length > 0,
   { message: 'At least one field must be provided for update' }
@@ -64,6 +66,23 @@ export const modelAndBackendParamSchema = z.object({
   backendId: z.string().min(1, 'Backend ID is required')
 })
 
+// Affinity management schemas
+export const affinityMappingFilterSchema = z.object({
+  model: z.string().optional(),
+  backendId: z.string().optional(),
+  limit: z.coerce.number().min(1).max(1000).default(100).optional(),
+  offset: z.coerce.number().min(0).default(0).optional()
+})
+
+export const clearAffinityMappingsSchema = z.object({
+  model: z.string().optional(),
+  sessionId: z.string().optional(),
+  backendId: z.string().optional()
+}).refine(
+  (data) => Object.keys(data).length > 0,
+  { message: 'At least one filter field is required to prevent accidental full deletion' }
+)
+
 export type LoadBalancingStrategy = z.infer<typeof loadBalancingStrategySchema>
 export type BackendConfig = z.infer<typeof backendConfigSchema>
 export type CreateModelConfigInput = z.infer<typeof createModelConfigSchema>
@@ -73,3 +92,5 @@ export type UpdateBackendInModelInput = z.infer<typeof updateBackendInModelSchem
 export type ModelParam = z.infer<typeof modelParamSchema>
 export type BackendIdParam = z.infer<typeof backendIdParamSchema>
 export type ModelAndBackendParam = z.infer<typeof modelAndBackendParamSchema>
+export type AffinityMappingFilter = z.infer<typeof affinityMappingFilterSchema>
+export type ClearAffinityMappings = z.infer<typeof clearAffinityMappingsSchema>
