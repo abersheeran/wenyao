@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto'
 /**
  * Database-backed metrics collector
  * Writes metrics to MongoDB in real-time (fire-and-forget)
+ * Automatically uses pre-aggregated views for optimized queries
  */
 export class DbMetricsCollector implements MetricsCollector {
   private storage: MetricsStorage
@@ -25,10 +26,11 @@ export class DbMetricsCollector implements MetricsCollector {
 
   /**
    * Initialize the collector (must be called once during startup)
+   * Automatically creates pre-aggregated views for performance optimization
    */
   async initialize(): Promise<void> {
     await this.storage.initialize()
-    console.log(`DbMetricsCollector initialized with instanceId: ${this.instanceId}`)
+    console.log(`✓ DbMetricsCollector initialized (instanceId: ${this.instanceId})`)
   }
 
   recordRequestStart(backendId: string, requestId: string): void {
