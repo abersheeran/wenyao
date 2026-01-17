@@ -65,7 +65,7 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
         <div>
           <h2 className="text-xl font-semibold">历史趋势（多实例聚合）</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            数据每 15 秒更新一次，显示所有实例的聚合结果
+            数据按 1 分钟聚合，每个时间点显示该分钟内所有请求的统计指标
           </p>
         </div>
         <div className="flex items-center gap-3">

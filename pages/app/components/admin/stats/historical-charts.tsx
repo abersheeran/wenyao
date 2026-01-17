@@ -190,7 +190,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
       <div>
         <div className="mb-4">
           <h3 className="text-base font-medium mb-1">成功率趋势</h3>
-          <p className="text-sm text-muted-foreground">各 Backend 请求成功率变化 (%)</p>
+          <p className="text-sm text-muted-foreground">各 Backend 在每分钟内的请求成功率 (%)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <LineChart
@@ -242,7 +242,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
       <div>
         <div className="mb-4">
           <h3 className="text-base font-medium mb-1">流式 TTFT 趋势</h3>
-          <p className="text-sm text-muted-foreground">流式请求的首 Token 响应时间 (毫秒)</p>
+          <p className="text-sm text-muted-foreground">各 Backend 在每分钟内的流式请求平均首 Token 响应时间 (毫秒)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <LineChart
@@ -293,7 +293,7 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
       <div>
         <div className="mb-4">
           <h3 className="text-base font-medium mb-1">非流式 TTFT 趋势</h3>
-          <p className="text-sm text-muted-foreground">非流式请求的首 Token 响应时间 (毫秒)</p>
+          <p className="text-sm text-muted-foreground">各 Backend 在每分钟内的非流式请求平均首 Token 响应时间 (毫秒)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <LineChart
@@ -343,8 +343,8 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
       {/* Total Requests Chart */}
       <div>
         <div className="mb-4">
-          <h3 className="text-base font-medium mb-1">累计请求数趋势</h3>
-          <p className="text-sm text-muted-foreground">各 Backend 处理的总请求数量</p>
+          <h3 className="text-base font-medium mb-1">请求量趋势</h3>
+          <p className="text-sm text-muted-foreground">各 Backend 在每分钟内处理的请求数量</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <AreaChart

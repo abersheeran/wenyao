@@ -257,7 +257,7 @@ export class MetricsStorage {
       match.instanceId = params.instanceId
     }
 
-    // Aggregate into 5-minute buckets
+    // Aggregate into 1-minute buckets
     const pipeline = [
       { $match: match },
       {
@@ -269,7 +269,7 @@ export class MetricsStorage {
               $dateTrunc: {
                 date: '$timestamp',
                 unit: 'minute',
-                binSize: 5
+                binSize: 1
               }
             }
           },
