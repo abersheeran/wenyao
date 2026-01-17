@@ -139,7 +139,6 @@ body {
   /* Prevent Radix UI modal from causing layout shift */
   html {
     overflow-y: scroll !important;
-    width: 100vw !important;
   }
 
   body {
