@@ -347,10 +347,62 @@ export class MetricsStorage {
   }
 
   /**
-   * Get historical stats data points (raw time-series data)
-   * Aggregates per-request data into time buckets
+   * Get historical stats data points (time-series data)
+   * Uses pre-aggregated 1-minute view for consistent, fast queries
+   * Note: Pre-aggregated view doesn't include instanceId breakdown
    */
   async getHistoricalStats(params: HistoryQueryParams): Promise<StatsDataPoint[]> {
+    // If instanceId is specified, fall back to raw collection query
+    // since the pre-aggregated view doesn't include instanceId
+    if (params.instanceId) {
+      return this.getHistoricalStatsFromRawCollection(params)
+    }
+
+    const match: any = {
+      timestamp: {
+        $gte: params.startTime,
+        $lte: params.endTime
+      }
+    }
+
+    if (params.backendId) {
+      match.backendId = params.backendId
+    }
+
+    // Query pre-aggregated view directly
+    const pipeline = [
+      { $match: match },
+      {
+        $project: {
+          _id: 0,
+          backendId: 1,
+          instanceId: { $literal: 'aggregated' }, // Mark as aggregated across instances
+          timestamp: 1,
+          totalRequests: 1,
+          successfulRequests: 1,
+          failedRequests: 1,
+          successRate: 1,
+          averageStreamingTTFT: '$avgStreamingTTFT',
+          averageNonStreamingTTFT: '$avgNonStreamingTTFT',
+          requestsInPeriod: '$totalRequests'
+        }
+      },
+      { $sort: { timestamp: -1 } }
+    ]
+
+    if (params.limit) {
+      pipeline.push({ $limit: params.limit } as any)
+    }
+
+    const results = await this.viewCollection.aggregate(pipeline).toArray()
+    return results as unknown as StatsDataPoint[]
+  }
+
+  /**
+   * Fallback method to query raw collection when instanceId filter is needed
+   * Private method used internally by getHistoricalStats
+   */
+  private async getHistoricalStatsFromRawCollection(params: HistoryQueryParams): Promise<StatsDataPoint[]> {
     const match: any = {
       timestamp: {
         $gte: params.startTime,
