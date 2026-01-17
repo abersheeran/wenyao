@@ -166,6 +166,7 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                               <TableHead>Model</TableHead>
                               <TableHead>Weight</TableHead>
                               <TableHead>Traffic Ratio</TableHead>
+                              <TableHead>Max Concurrency</TableHead>
                               <TableHead>Enabled</TableHead>
                               <TableHead>Actions</TableHead>
                             </TableRow>
@@ -184,6 +185,15 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                                 </TableCell>
                                 <TableCell>{backend.weight}</TableCell>
                                 <TableCell>{((backend as any).trafficRatio * 100).toFixed(1)}%</TableCell>
+                                <TableCell>
+                                  {backend.maxConcurrentRequests !== undefined && backend.maxConcurrentRequests > 0 ? (
+                                    <span className="font-mono text-sm" title="最大并发请求数">
+                                      {backend.maxConcurrentRequests}
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-400" title="无限制">∞</span>
+                                  )}
+                                </TableCell>
                                 <TableCell>
                                   <Switch
                                     checked={backend.enabled}

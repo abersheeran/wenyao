@@ -7,11 +7,6 @@ import type { RequestCompleteData, TimeWindow, HistoryQueryParams } from './type
  */
 export interface MetricsCollector {
   /**
-   * Record when a request starts (for tracking active requests)
-   */
-  recordRequestStart(backendId: string, requestId: string): void
-
-  /**
    * Record request completion with full metrics
    * This should be fire-and-forget (async, non-blocking)
    */

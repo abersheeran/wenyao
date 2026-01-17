@@ -36,7 +36,8 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
       model: form.model,
       streamingTTFTTimeout: form.streamingTTFTTimeout,
       nonStreamingTTFTTimeout: form.nonStreamingTTFTTimeout,
-      recordRequests: form.recordRequests
+      recordRequests: form.recordRequests,
+      maxConcurrentRequests: form.maxConcurrentRequests
     });
     onSaved();
   }, [api, model, form, onSaved]);
@@ -159,6 +160,25 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
                 checked={form.recordRequests || false}
                 onCheckedChange={(v) => setForm({ ...form, recordRequests: v })}
               />
+            </div>
+          </div>
+
+          {/* Concurrency Limit Section */}
+          <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+            <h4 className="text-sm font-medium text-gray-700">并发限制 (可选)</h4>
+            <div>
+              <label className="block text-sm mb-1">最大并发请求数</label>
+              <Input
+                type="number"
+                min={0}
+                step={1}
+                value={form.maxConcurrentRequests ?? 0}
+                onChange={(e) => setForm({ ...form, maxConcurrentRequests: e.target.value === "" ? 0 : Number(e.target.value) })}
+                placeholder="0"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                限制该 backend 同时处理的最大请求数。0 表示不限制，大于 0 表示具体限制。
+              </p>
             </div>
           </div>
 

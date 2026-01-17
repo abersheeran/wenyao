@@ -13,7 +13,8 @@ export const backendConfigSchema = z.object({
   model: z.string().min(1, 'Model name cannot be empty').optional(),
   streamingTTFTTimeout: z.number().nonnegative('Streaming TTFT timeout must be non-negative').optional(),
   nonStreamingTTFTTimeout: z.number().nonnegative('Non-streaming TTFT timeout must be non-negative').optional(),
-  recordRequests: z.boolean().default(false).optional()
+  recordRequests: z.boolean().default(false).optional(),
+  maxConcurrentRequests: z.number().int().nonnegative('Max concurrent requests must be non-negative').optional()
 })
 
 // Schema for creating a new model configuration
@@ -46,7 +47,8 @@ export const updateBackendInModelSchema = z.object({
   model: z.string().min(1, 'Model name cannot be empty').optional(),
   streamingTTFTTimeout: z.number().nonnegative('Streaming TTFT timeout must be non-negative').optional(),
   nonStreamingTTFTTimeout: z.number().nonnegative('Non-streaming TTFT timeout must be non-negative').optional(),
-  recordRequests: z.boolean().optional()
+  recordRequests: z.boolean().optional(),
+  maxConcurrentRequests: z.number().int().nonnegative('Max concurrent requests must be non-negative').optional()
 }).refine(
   (data) => Object.keys(data).length > 0,
   { message: 'At least one field must be provided for update' }

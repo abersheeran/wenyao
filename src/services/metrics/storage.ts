@@ -515,18 +515,6 @@ export class MetricsStorage {
     return results as unknown as StatsDataPoint[]
   }
 
-  /**
-   * Get count of active requests (requests in the last minute without completion)
-   * Used for active requests gauge
-   */
-  async getActiveRequestsCount(backendId: string): Promise<number> {
-    const oneMinuteAgo = new Date(Date.now() - 60000)
-    return this.collection.countDocuments({
-      backendId,
-      timestamp: { $gte: oneMinuteAgo }
-    })
-  }
-
   private getEmptyStats(backendId: string): BackendStats {
     return {
       backendId,

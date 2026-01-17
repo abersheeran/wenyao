@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator'
 import { configManager } from '../services/config-manager.js'
 import { mongoDBService } from '../services/mongodb.js'
 import { affinityManager } from '../services/affinity-manager.js'
+import { concurrencyLimiter } from '../services/concurrency-limiter.js'
 import { getMetricsCollector } from '../index.js'
 import {
   createModelConfigSchema,
@@ -415,6 +416,48 @@ admin.get('/metrics', async (c) => {
       'Content-Type': 'text/plain; version=0.0.4'
     })
   }
+})
+
+// GET /admin/active-requests - Get active request counts for all backends
+admin.get('/active-requests', async (c) => {
+  const metricsCollector = getMetricsCollector()
+
+  if (!metricsCollector.isEnabled()) {
+    return c.json({ error: 'Metrics collection is disabled' }, 503)
+  }
+
+  const models = configManager.getAllModels()
+  const activeRequests: Record<string, {
+    backendId: string
+    model: string
+    activeCount: number
+    maxConcurrent: number | null
+    utilizationPercent: number | null
+  }> = {}
+
+  const allActiveCounts = await concurrencyLimiter.getAllActiveRequestCounts()
+
+  for (const model of models) {
+    for (const backend of model.backends) {
+      if (backend.enabled) {
+        const activeCount = allActiveCounts[backend.id] || 0
+        const maxConcurrent = backend.maxConcurrentRequests || null
+        const utilizationPercent = maxConcurrent
+          ? Math.round((activeCount / maxConcurrent) * 100)
+          : null
+
+        activeRequests[backend.id] = {
+          backendId: backend.id,
+          model: model.model,
+          activeCount,
+          maxConcurrent,
+          utilizationPercent
+        }
+      }
+    }
+  }
+
+  return c.json({ activeRequests })
 })
 
 // ===== Instance Management Endpoints =====

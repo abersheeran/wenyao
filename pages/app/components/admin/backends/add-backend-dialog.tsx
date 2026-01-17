@@ -27,14 +27,15 @@ export function AddBackendDialog({ open, onOpenChange, model, onAdded }: {
     model: undefined,
     streamingTTFTTimeout: 0,
     nonStreamingTTFTTimeout: 0,
-    recordRequests: false
+    recordRequests: false,
+    maxConcurrentRequests: 0
   });
 
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!model) return;
     await api.addBackend(model, form);
-    setForm({ id: "", url: "", apiKey: "", weight: 1, enabled: true, model: undefined, streamingTTFTTimeout: 0, nonStreamingTTFTTimeout: 0, recordRequests: false });
+    setForm({ id: "", url: "", apiKey: "", weight: 1, enabled: true, model: undefined, streamingTTFTTimeout: 0, nonStreamingTTFTTimeout: 0, recordRequests: false, maxConcurrentRequests: 0 });
     onOpenChange(false);
     onAdded();
   }, [api, model, form, onOpenChange, onAdded]);
@@ -153,6 +154,25 @@ export function AddBackendDialog({ open, onOpenChange, model, onAdded }: {
                 checked={form.recordRequests || false}
                 onCheckedChange={(v) => setForm({ ...form, recordRequests: v })}
               />
+            </div>
+          </div>
+
+          {/* Concurrency Limit Section */}
+          <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+            <h4 className="text-sm font-medium text-gray-700">并发限制 (可选)</h4>
+            <div>
+              <label className="block text-sm mb-1">最大并发请求数</label>
+              <Input
+                type="number"
+                min={0}
+                step={1}
+                value={form.maxConcurrentRequests ?? 0}
+                onChange={(e) => setForm({ ...form, maxConcurrentRequests: e.target.value === "" ? 0 : Number(e.target.value) })}
+                placeholder="0"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                限制该 backend 同时处理的最大请求数。0 表示不限制，大于 0 表示具体限制。
+              </p>
             </div>
           </div>
 

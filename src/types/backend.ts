@@ -12,6 +12,7 @@ export interface BackendConfig {
   streamingTTFTTimeout?: number // Optional: TTFT timeout in milliseconds for streaming requests
   nonStreamingTTFTTimeout?: number // Optional: TTFT timeout in milliseconds for non-streaming requests
   recordRequests?: boolean // Optional: Record all requests (URL, headers, body) to MongoDB
+  maxConcurrentRequests?: number // Optional: Maximum concurrent requests (undefined/0 = no limit, >0 = specific limit)
 }
 
 // Load balancing strategy options for min-error-rate

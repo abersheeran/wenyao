@@ -3,6 +3,17 @@ import { configManager, type ConfigManager } from './config-manager.js'
 import { affinityManager } from './affinity-manager.js'
 import type { MetricsCollector } from './metrics/index.js'
 
+/**
+ * Load Balancer
+ *
+ * Responsible for selecting the most appropriate backend for a given request.
+ * Implements various strategies:
+ * - Weighted Round Robin (fallback)
+ * - Lowest TTFT (Time-To-First-Token)
+ * - Minimum Error Rate
+ *
+ * Also handles forced backend selection via headers and session affinity.
+ */
 export class LoadBalancer {
   private configManager: ConfigManager
   private metricsCollector: MetricsCollector | null
@@ -13,19 +24,26 @@ export class LoadBalancer {
   }
 
   /**
-   * Set the metrics collector (called after initialization)
+   * Updates the metrics collector instance.
+   * Required for metrics-based strategies (lowest-ttft, min-error-rate).
    */
   setMetricsCollector(metricsCollector: MetricsCollector): void {
     this.metricsCollector = metricsCollector
   }
 
   /**
-   * Select a backend for a specific model using the configured load balancing strategy
-   * @param model - The model name from the OpenAI request
-   * @param forceBackendId - Optional backend ID to force selection (bypasses load balancing)
-   * @param isStream - Whether this is a streaming request (used for TTFT-based strategies)
-   * @param sessionId - Optional session ID for affinity-based routing
-   * @returns Selected backend or null if none available
+   * Selects a backend for a specific model request.
+   *
+   * Precedence:
+   * 1. Forced backend (via X-Backend-ID header).
+   * 2. Session affinity (if enabled for the model and session ID provided).
+   * 3. Configured load balancing strategy.
+   *
+   * @param model - The target model name
+   * @param forceBackendId - Optional ID to override selection
+   * @param isStream - Whether the request is streaming
+   * @param sessionId - Optional session ID for affinity
+   * @returns Selected backend or null if no healthy backends are available.
    */
   async selectBackend(model: string, forceBackendId?: string, isStream?: boolean, sessionId?: string): Promise<BackendConfig | null> {
     const modelConfig = this.configManager.getModelConfig(model)

@@ -1,22 +1,25 @@
 import { MetricsStorage } from './storage.js'
+import { concurrencyLimiter } from '../concurrency-limiter.js'
 
 /**
  * Prometheus text format exporter
  * Generates Prometheus exposition format from MongoDB metrics
  */
 export class PrometheusExporter {
-  constructor(private storage: MetricsStorage) {}
+  constructor(
+    private storage: MetricsStorage
+  ) {}
 
   /**
    * Generate Prometheus text format metrics
-   * Query recent metrics (last 5 minutes) and format as Prometheus
+   * Query recent metrics (last 1 minute) and format as Prometheus
    */
   async generateMetrics(): Promise<string> {
     const now = new Date()
-    const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000)
+    const oneMinuteAgo = new Date(now.getTime() - 60 * 1000)
 
     const statsMap = await this.storage.getAllStats({
-      startTime: fiveMinutesAgo,
+      startTime: oneMinuteAgo,
       endTime: now
     })
 
@@ -98,20 +101,21 @@ export class PrometheusExporter {
     }
 
     // === Active Requests Gauge ===
-    // Note: This would require tracking active requests separately
-    // For now, we'll skip this metric or calculate from recent requests
     lines.push('')
     lines.push('# HELP llm_proxy_active_requests Currently active requests per backend')
     lines.push('# TYPE llm_proxy_active_requests gauge')
 
-    for (const [backendId] of statsMap) {
+    // Only export active requests if concurrency limiter is enabled
+    if (concurrencyLimiter.isEnabled()) {
       try {
-        const activeCount = await this.storage.getActiveRequestsCount(backendId)
-        if (activeCount > 0) {
-          lines.push(`llm_proxy_active_requests{backend_id="${backendId}"} ${activeCount}`)
+        const activeCounts = await concurrencyLimiter.getAllActiveRequestCounts()
+        for (const [backendId, activeCount] of Object.entries(activeCounts)) {
+          if (activeCount > 0) {
+            lines.push(`llm_proxy_active_requests{backend_id="${backendId}"} ${activeCount}`)
+          }
         }
       } catch (error) {
-        console.error(`Failed to get active requests for ${backendId}:`, error)
+        console.error('Failed to get all active request counts for Prometheus:', error)
       }
     }
 

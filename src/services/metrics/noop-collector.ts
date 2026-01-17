@@ -7,10 +7,6 @@ import type { RequestCompleteData, TimeWindow, HistoryQueryParams } from './type
  * All methods are lightweight and return empty/default values
  */
 export class NoopMetricsCollector implements MetricsCollector {
-  recordRequestStart(_backendId: string, _requestId: string): void {
-    // No-op
-  }
-
   async recordRequestComplete(_data: RequestCompleteData): Promise<void> {
     // No-op
   }

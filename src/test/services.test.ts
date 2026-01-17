@@ -3,6 +3,8 @@ import { ConfigManager } from '../services/config-manager.js'
 import { LoadBalancer } from '../services/load-balancer.js'
 import { createMetricsCollector } from '../services/metrics/index.js'
 import type { MetricsCollector } from '../services/metrics/index.js'
+import { concurrencyLimiter } from '../services/concurrency-limiter.js'
+import { createActiveRequestStore } from '../services/active-requests/index.js'
 import type { BackendConfig, ModelConfig } from '../types/backend.js'
 import { MongoClient, Db } from 'mongodb'
 
@@ -122,6 +124,17 @@ describe('MetricsCollector', () => {
   })
 
   beforeEach(async () => {
+    // Initialize concurrency limiter if DB is available
+    if (db) {
+      const store = createActiveRequestStore({
+        type: 'mongodb',
+        instanceId: 'test-instance',
+        db: db
+      })
+      await store.initialize()
+      concurrencyLimiter.initialize(store)
+    }
+
     // Create metrics collector (will use NoopCollector if MongoDB not available)
     metricsCollector = await createMetricsCollector({
       enabled: !!db,
@@ -147,7 +160,7 @@ describe('MetricsCollector', () => {
       return
     }
 
-    metricsCollector.recordRequestStart('backend-1', 'req-1')
+    await concurrencyLimiter.recordStart('backend-1', 'req-1')
     await metricsCollector.recordRequestComplete({
       backendId: 'backend-1',
       requestId: 'req-1',
@@ -175,7 +188,7 @@ describe('MetricsCollector', () => {
       return
     }
 
-    metricsCollector.recordRequestStart('backend-1', 'req-2')
+    await concurrencyLimiter.recordStart('backend-1', 'req-2')
     await metricsCollector.recordRequestComplete({
       backendId: 'backend-1',
       requestId: 'req-2',
@@ -208,7 +221,7 @@ describe('MetricsCollector', () => {
     ]
 
     for (const req of requests) {
-      metricsCollector.recordRequestStart('backend-1', req.requestId)
+      await concurrencyLimiter.recordStart('backend-1', req.requestId)
       await metricsCollector.recordRequestComplete({
         backendId: 'backend-1',
         requestId: req.requestId,
@@ -241,7 +254,7 @@ describe('MetricsCollector', () => {
     ]
 
     for (const req of requests) {
-      metricsCollector.recordRequestStart('backend-1', req.requestId)
+      await concurrencyLimiter.recordStart('backend-1', req.requestId)
       await metricsCollector.recordRequestComplete({
         backendId: 'backend-1',
         requestId: req.requestId,
@@ -267,7 +280,7 @@ describe('MetricsCollector', () => {
       return
     }
 
-    metricsCollector.recordRequestStart('backend-1', 'req-10')
+    await concurrencyLimiter.recordStart('backend-1', 'req-10')
     await metricsCollector.recordRequestComplete({
       backendId: 'backend-1',
       requestId: 'req-10',
@@ -293,7 +306,6 @@ describe('MetricsCollector', () => {
 
     expect(noopCollector.isEnabled()).toBe(false)
 
-    noopCollector.recordRequestStart('backend-1', 'req-11')
     await noopCollector.recordRequestComplete({
       backendId: 'backend-1',
       requestId: 'req-11',
@@ -389,13 +401,13 @@ describe('LoadBalancer', () => {
     expect(counts['backend-2']).toBeLessThan(600)
   })
 
-  it('handles zero weights by random selection', async () => {
+  it('returns null when all backends have zero weight', async () => {
     await cm.addModelConfig({ model: 'gpt-4', backends: [
       { id: 'backend-1', url: 'https://a.test', apiKey: 'k1', weight: 0, enabled: true },
       { id: 'backend-2', url: 'https://b.test', apiKey: 'k2', weight: 0, enabled: true }
     ], loadBalancingStrategy: 'weighted' })
     const selected = await lb.selectBackend('gpt-4')
-    expect(selected).not.toBeNull()
-    expect(['backend-1', 'backend-2']).toContain(selected?.id)
+    // When all backends have weight=0, they are filtered out and null is returned
+    expect(selected).toBeNull()
   })
 })

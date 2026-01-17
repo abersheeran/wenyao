@@ -2,20 +2,40 @@ import { mongoDBService } from './mongodb.js'
 import type { ConfigManager } from './config-manager.js'
 import type { AffinityMapping, BackendConfig } from '../types/backend.js'
 
+/**
+ * Affinity Manager
+ *
+ * Manages "Session Affinity" (sticky sessions) between clients and backends.
+ * Ensures that requests with the same session ID are routed to the same backend
+ * when possible, improving cache consistency and performance.
+ *
+ * Supports in-memory caching and persistent storage via MongoDB.
+ */
 export class AffinityManager {
-  // In-memory cache: key = "model:sessionId", value = backendId
+  /** In-memory cache for fast lookup: key = "model:sessionId", value = backendId */
   private affinityCache: Map<string, string> = new Map()
+  /** Maximum number of entries in the in-memory cache */
   private readonly cacheMaxSize = 10000
 
+  /**
+   * Generates a unique cache key for a specific model and session.
+   */
   private getCacheKey(model: string, sessionId: string): string {
     return `${model}:${sessionId}`
   }
 
   /**
-   * Get backend for a session, returns null if:
-   * - No mapping exists
-   * - Backend is disabled/not found
-   * - Affinity disabled for model
+   * Retrieves the backend assigned to a specific session.
+   * Logic flow:
+   * 1. Check in-memory cache.
+   * 2. If not found and MongoDB is connected, check MongoDB.
+   * 3. If found, verify that the backend is still enabled and has non-zero weight.
+   * 4. If backend is invalid, clear the mapping.
+   *
+   * @param model - The model name
+   * @param sessionId - The session identifier
+   * @param configManager - The configuration manager to verify backend status
+   * @returns The assigned backend configuration, or null if no valid mapping exists.
    */
   async getAffinityBackend(
     model: string,
@@ -68,8 +88,12 @@ export class AffinityManager {
   }
 
   /**
-   * Set/update backend affinity for a session
-   * Creates new mapping or updates lastAccessedAt
+   * Sets or updates the backend affinity for a session.
+   * Persists the mapping to MongoDB and updates the in-memory cache.
+   *
+   * @param model - The model name
+   * @param sessionId - The session identifier
+   * @param backendId - The ID of the backend to attach to the session
    */
   async setAffinityBackend(
     model: string,

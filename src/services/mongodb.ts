@@ -2,6 +2,13 @@ import { MongoClient, Db, ChangeStream, Collection } from 'mongodb'
 import type { ModelConfig, StatsDataPoint, RecordedRequest, AffinityMapping } from '../types/backend.js'
 import type { ApiKey } from '../types/apikey.js'
 
+/**
+ * MongoDB Service
+ *
+ * Centralized service for MongoDB operations.
+ * Handles connection, collection access, and initial index creation.
+ * Supports multiple collections for models, API keys, metrics, and affinity mappings.
+ */
 export class MongoDBService {
   private client: MongoClient | null = null
   private db: Db | null = null
@@ -9,6 +16,9 @@ export class MongoDBService {
 
   constructor(private url: string = process.env.MONGODB_URL || 'mongodb://localhost:27017/wenyao') {}
 
+  /**
+   * Establishes connection to MongoDB and initializes collections/indexes.
+   */
   async connect(): Promise<void> {
     try {
       this.client = new MongoClient(this.url)
@@ -16,19 +26,12 @@ export class MongoDBService {
       this.db = this.client.db()
       console.log('Connected to MongoDB')
 
-      // Create index on model field for faster queries
+      // Ensure essential indexes exist
       await this.getModelsCollection().createIndex({ model: 1 }, { unique: true })
-
-      // Create unique index on API key
       await this.getApiKeysCollection().createIndex({ key: 1 }, { unique: true })
 
-      // Note: The request_metrics collection is now initialized by MetricsStorage
-      // in src/services/metrics/storage.ts when metrics are enabled
-
-      // Initialize recorded requests collection
+      // Initialize secondary collections
       await this.initializeRecordedRequestsCollection()
-
-      // Initialize affinity mappings collection
       await this.initializeAffinityMappingsCollection()
     } catch (error) {
       console.error('Failed to connect to MongoDB:', error)
@@ -36,6 +39,9 @@ export class MongoDBService {
     }
   }
 
+  /**
+   * Closes the MongoDB connection and any active change streams.
+   */
   async disconnect(): Promise<void> {
     if (this.changeStream) {
       await this.changeStream.close()
@@ -49,6 +55,17 @@ export class MongoDBService {
     }
   }
 
+  /**
+   * Returns whether the service is currently connected to MongoDB.
+   */
+  isConnected(): boolean {
+    return this.client !== null && this.db !== null
+  }
+
+  /**
+   * Returns the active database instance.
+   * Throws if not connected.
+   */
   getDatabase(): Db {
     if (!this.db) {
       throw new Error('Database not initialized. Call connect() first.')
@@ -56,84 +73,60 @@ export class MongoDBService {
     return this.db
   }
 
-  // Updated to use 'models' collection with model as primary key
+  /**
+   * Collection for model and backend configurations.
+   */
   getModelsCollection(): Collection<ModelConfig> {
     return this.getDatabase().collection<ModelConfig>('models')
   }
 
-  // Legacy method for backward compatibility - returns 'backends' collection
-  // This is kept for migration purposes
-  getBackendsCollection(): Collection<any> {
-    return this.getDatabase().collection('backends')
-  }
-
-  // DEPRECATED: Stats history collection (replaced by request_metrics)
-  // This is kept for backward compatibility but is no longer actively used
-  // New metrics system uses the 'request_metrics' collection via MetricsStorage
-  getStatsHistoryCollection(): Collection<StatsDataPoint> {
-    return this.getDatabase().collection<StatsDataPoint>('stats_history')
-  }
-
-  // API keys collection
+  /**
+   * Collection for admin API keys.
+   */
   getApiKeysCollection(): Collection<ApiKey> {
     return this.getDatabase().collection<ApiKey>('apikeys')
   }
 
-  // Recorded requests collection
+  /**
+   * Collection for recorded proxy requests (for debugging/audit).
+   */
   getRecordedRequestsCollection(): Collection<RecordedRequest> {
     return this.getDatabase().collection<RecordedRequest>('recorded_requests')
   }
 
-  // Affinity mappings collection
+  /**
+   * Collection for session affinity mappings.
+   */
   getAffinityMappingsCollection(): Collection<AffinityMapping> {
     return this.getDatabase().collection<AffinityMapping>('affinity_mappings')
   }
 
-  // DEPRECATED: Initialize stats history collection with indexes
-  // This collection is no longer used by the new metrics system
-  // Kept for backward compatibility only
-  async initializeStatsHistoryCollection(): Promise<void> {
-    const collection = this.getStatsHistoryCollection()
-
-    // Create compound index on backendId and timestamp for efficient queries
-    await collection.createIndex({ backendId: 1, timestamp: -1 })
-
-    // Create index on instanceId and timestamp for single-instance queries
-    await collection.createIndex({ instanceId: 1, timestamp: -1 })
-
-    // Create compound index for multi-instance aggregation queries
-    await collection.createIndex({ instanceId: 1, backendId: 1, timestamp: -1 })
-
-    // Create TTL index to automatically delete data older than 7 days
-    await collection.createIndex(
-      { timestamp: 1 },
-      { expireAfterSeconds: 7 * 24 * 60 * 60 } // 7 days in seconds
-    )
-
-    console.log('Stats history collection initialized with indexes (DEPRECATED)')
-  }
-
-  // Initialize recorded requests collection with indexes
-  async initializeRecordedRequestsCollection(): Promise<void> {
+  /**
+   * Initializes the recorded requests collection with indexes.
+   */
+  private async initializeRecordedRequestsCollection(): Promise<void> {
     const collection = this.getRecordedRequestsCollection()
 
-    // Create compound index for backend + time queries (primary use case)
+    // Compound index for backend + time queries (primary use case)
     await collection.createIndex({ backendId: 1, timestamp: -1 })
 
-    // Create index for model + time queries
+    // Index for model + time queries
     await collection.createIndex({ model: 1, timestamp: -1 })
 
-    // Create index for time range queries
+    // Index for time range queries
     await collection.createIndex({ timestamp: -1 })
 
     console.log('Recorded requests collection initialized with indexes')
   }
 
-  // Initialize affinity mappings collection with indexes
-  async initializeAffinityMappingsCollection(): Promise<void> {
+  /**
+   * Initializes the affinity mappings collection with indexes.
+   * Includes a TTL index to expire mappings after 1 hour of inactivity.
+   */
+  private async initializeAffinityMappingsCollection(): Promise<void> {
     const collection = this.getAffinityMappingsCollection()
 
-    // Compound unique index for model + sessionId lookups (primary use case)
+    // Compound unique index for model + sessionId lookups
     await collection.createIndex({ model: 1, sessionId: 1 }, { unique: true })
 
     // Index for backend cleanup queries
@@ -142,15 +135,23 @@ export class MongoDBService {
     // TTL index to auto-delete stale mappings (1 hour of inactivity)
     await collection.createIndex(
       { lastAccessedAt: 1 },
-      { expireAfterSeconds: 3600 } // 1 hour in seconds
+      { expireAfterSeconds: 3600 }
     )
 
     console.log('Affinity mappings collection initialized with indexes')
   }
 
+  /**
+   * Sets up a MongoDB Change Stream to watch for model configuration changes.
+   * This allows the application to respond in real-time to changes made in the database.
+   *
+   * @param onChange - Callback triggered when a change occurs
+   */
   async watchModels(
     onChange: (modelConfig: ModelConfig, operationType: 'insert' | 'update' | 'delete' | 'replace') => void
   ): Promise<void> {
+    if (!this.isConnected()) return
+
     const collection = this.getModelsCollection()
 
     this.changeStream = collection.watch([], {
@@ -163,10 +164,6 @@ export class MongoDBService {
       try {
         switch (change.operationType) {
           case 'insert':
-            if ('fullDocument' in change && change.fullDocument) {
-              onChange(change.fullDocument as ModelConfig, 'insert')
-            }
-            break
           case 'update':
           case 'replace':
             if ('fullDocument' in change && change.fullDocument) {
@@ -174,9 +171,10 @@ export class MongoDBService {
             }
             break
           case 'delete':
-            if ('documentKey' in change && change.documentKey.model) {
-              // For delete, we only have the model name
-              onChange({ model: change.documentKey.model.toString(), backends: [], loadBalancingStrategy: 'weighted' } as ModelConfig, 'delete')
+            if ('documentKey' in change && change.documentKey) {
+              // For delete, we might only have the ID or indexed fields depending on config
+              // Here we pass a partial object as the actual config is gone
+              onChange({ model: (change.documentKey as any).model?.toString() || 'unknown' } as any, 'delete')
             }
             break
         }
@@ -190,6 +188,9 @@ export class MongoDBService {
     })
   }
 
+  /**
+   * Stops the active MongoDB Change Stream.
+   */
   async stopWatching(): Promise<void> {
     if (this.changeStream) {
       await this.changeStream.close()
@@ -198,8 +199,19 @@ export class MongoDBService {
     }
   }
 
-  isConnected(): boolean {
-    return this.client !== null && this.db !== null
+  /**
+   * DEPRECATED: Standardized stats history.
+   * Kept for backward compatibility during migration.
+   */
+  async initializeStatsHistoryCollection(): Promise<void> {
+    try {
+      const collection = this.getDatabase().collection('stats_history')
+      await collection.createIndex({ instanceId: 1, timestamp: -1 })
+      await collection.createIndex({ instanceId: 1, backendId: 1, timestamp: -1 })
+      console.log('Stats history collection initialized (DEPRECATED)')
+    } catch (e) {
+      // Ignore errors if collection doesn't exist or other issues
+    }
   }
 }
 

@@ -8,8 +8,11 @@ import { mongoDBService } from './services/mongodb.js'
 import { configManager } from './services/config-manager.js'
 import { instanceManager } from './services/instance-manager.js'
 import { loadBalancer } from './services/load-balancer.js'
+import { concurrencyLimiter } from './services/concurrency-limiter.js'
 import { createMetricsCollector, validateMetricsRequirement } from './services/metrics/index.js'
+import { createActiveRequestStore } from './services/active-requests/index.js'
 import type { MetricsCollector } from './services/metrics/index.js'
+import { createClient, type RedisClientType } from 'redis'
 
 // Global metrics collector instance
 let metricsCollector: MetricsCollector
@@ -38,83 +41,141 @@ app.route('/v1', proxy)
 app.use('/*', serveStatic({ root: './pages/build/client' }))
 app.use('/*', serveStatic({ path: './pages/build/client/index.html' }))
 
-// Initialize MongoDB and start server
+// Initialize and start the server
 async function startServer() {
   const port = process.env.PORT ? parseInt(process.env.PORT) : 51818
 
-  // Determine if metrics should be enabled
-  const enableMetrics = process.env.ENABLE_METRICS !== 'false' // Default: true for backward compatibility
+  // 1. Determine Configuration and Store types
+  const enableMetrics = process.env.ENABLE_METRICS !== 'false'
+  let resolvedStoreType: 'mongodb' | 'redis' = (process.env.ACTIVE_REQUEST_STORE_TYPE as 'mongodb' | 'redis') || 'mongodb'
 
-  // Try to connect to MongoDB if MONGODB_URL is provided
+  if (!['mongodb', 'redis'].includes(resolvedStoreType)) {
+    console.error(`Invalid ACTIVE_REQUEST_STORE_TYPE: ${resolvedStoreType}. Must be 'mongodb' or 'redis'`)
+    process.exit(1)
+  }
+
+  // 2. Initialize Data Services (MongoDB, Redis, Concurrency Limiter)
+  await initializeDataServices(resolvedStoreType)
+
+  // 3. Initialize Metrics System
+  metricsCollector = await createMetricsCollector({
+    enabled: enableMetrics && !!mongoDBService.isConnected(),
+    db: mongoDBService.isConnected() ? mongoDBService.getDatabase() : undefined,
+    instanceId: instanceManager.getInstanceId()
+  })
+
+  if (enableMetrics && !mongoDBService.isConnected()) {
+    console.warn('⚠️  Metrics require MongoDB. Metrics will be disabled.')
+  }
+
+  // 4. Configure Load Balancer
+  loadBalancer.setMetricsCollector(metricsCollector)
+
+  // 5. Validate Metrics Compatibility
+  validateMetricsCompatibility()
+
+  // 6. Start the HTTP server
+  const server = serve({
+    fetch: app.fetch,
+    port
+  }, (info) => {
+    console.log(`\n🚀 文鳐 is running!`)
+    console.log(`- Instance ID: ${instanceManager.getInstanceId()}`)
+    console.log(`- Port: ${info.port}`)
+    console.log(`- Admin Panel: http://localhost:${info.port}/admin`)
+    console.log(`- Proxy API: http://localhost:${info.port}/v1/chat/completions`)
+    console.log(`- Metrics: ${metricsCollector.isEnabled() ? 'Enabled' : 'Disabled'}`)
+    console.log(`- Active Store: ${resolvedStoreType}\n`)
+  })
+
+  // 7. Handle Graceful Shutdown
+  setupGracefulShutdown()
+}
+
+/**
+ * Initialize data layers including MongoDB and Redis
+ */
+async function initializeDataServices(storeType: 'mongodb' | 'redis') {
   if (process.env.MONGODB_URL) {
     console.log('Connecting to MongoDB...')
     await mongoDBService.connect()
     await configManager.initializeFromMongoDB()
-    console.log('MongoDB integration enabled')
 
-    // Initialize metrics collector
-    metricsCollector = await createMetricsCollector({
-      enabled: enableMetrics,
+    let redisClient: RedisClientType | undefined
+    if (storeType === 'redis') {
+      const redisUrl = process.env.REDIS_URL
+      if (!redisUrl) {
+        console.warn('⚠️  REDIS_URL not provided, falling back to MongoDB for active request tracking')
+        storeType = 'mongodb'
+      } else {
+        console.log('Connecting to Redis...')
+        try {
+          const client = createClient({ url: redisUrl })
+          await client.connect()
+          await client.ping()
+          redisClient = client as unknown as RedisClientType
+          console.log('✓ Redis connection established')
+        } catch (err) {
+          console.error('Failed to connect to Redis:', err)
+          console.warn('Falling back to MongoDB for active request tracking')
+          storeType = 'mongodb'
+        }
+      }
+    }
+
+    // Initialize ConcurrencyLimiter with an ActiveRequestStore
+    const activeRequestStore = createActiveRequestStore({
+      type: storeType,
+      instanceId: instanceManager.getInstanceId(),
       db: mongoDBService.getDatabase(),
-      instanceId: instanceManager.getInstanceId()
+      redis: redisClient
     })
+    await activeRequestStore.initialize()
+    concurrencyLimiter.initialize(activeRequestStore)
   } else {
     console.log('MONGODB_URL not provided, using in-memory storage')
-
-    // Without MongoDB, metrics cannot be enabled
-    if (enableMetrics) {
-      console.warn('Metrics require MongoDB. Metrics will be disabled.')
-    }
-    metricsCollector = await createMetricsCollector({
-      enabled: false
+    // Fallback for standalone mode
+    const activeRequestStore = createActiveRequestStore({
+      type: 'mongodb', // Will fallback to in-memory if no DB
+      instanceId: instanceManager.getInstanceId(),
     })
+    await activeRequestStore.initialize()
+    concurrencyLimiter.initialize(activeRequestStore)
   }
+}
 
-  // Set metrics collector on load balancer
-  loadBalancer.setMetricsCollector(metricsCollector)
-
-  // Validate that all configured strategies are compatible with metrics settings
-  if (metricsCollector.isEnabled() === false) {
+/**
+ * Validates that the current model strategies are compatible with the metrics setting
+ */
+function validateMetricsCompatibility() {
+  if (!metricsCollector.isEnabled()) {
     const models = configManager.getAllModels()
     for (const model of models) {
       try {
         validateMetricsRequirement(model.loadBalancingStrategy, false)
       } catch (error) {
-        console.error(`Configuration error for model '${model.model}':`, (error as Error).message)
+        console.error(`❌ Configuration error for model '${model.model}':`, (error as Error).message)
         process.exit(1)
       }
     }
   }
+}
 
-  // Start the HTTP server
-  serve({
-    fetch: app.fetch,
-    port
-  }, (info) => {
-    console.log(`Instance ID: ${instanceManager.getInstanceId()}`)
-    console.log(`OpenAI API Proxy is running on http://localhost:${info.port}`)
-    console.log(`Admin API: http://localhost:${info.port}/api/admin`)
-    console.log(`Proxy API: http://localhost:${info.port}/v1/chat/completions`)
-  })
-
-  // Handle graceful shutdown
-  process.on('SIGINT', async () => {
-    console.log('\nShutting down gracefully...')
+/**
+ * Setup process listeners for graceful shutdown
+ */
+function setupGracefulShutdown() {
+  const shutdown = async (signal: string) => {
+    console.log(`\nReceived ${signal}. Shutting down gracefully...`)
     if (metricsCollector) {
       await metricsCollector.shutdown()
     }
     await mongoDBService.disconnect()
     process.exit(0)
-  })
+  }
 
-  process.on('SIGTERM', async () => {
-    console.log('\nShutting down gracefully...')
-    if (metricsCollector) {
-      await metricsCollector.shutdown()
-    }
-    await mongoDBService.disconnect()
-    process.exit(0)
-  })
+  process.on('SIGINT', () => shutdown('SIGINT'))
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
 }
 
 // Export metrics collector for use in routes

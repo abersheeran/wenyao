@@ -15,13 +15,11 @@ export class DbMetricsCollector implements MetricsCollector {
   private storage: MetricsStorage
   private prometheusExporter: PrometheusExporter
   private instanceId: string
-  private activeRequests: Map<string, { backendId: string; startTime: number }>
 
   constructor(private db: Db, instanceId?: string) {
     this.storage = new MetricsStorage(db)
     this.prometheusExporter = new PrometheusExporter(this.storage)
     this.instanceId = instanceId || randomUUID()
-    this.activeRequests = new Map()
   }
 
   /**
@@ -33,21 +31,11 @@ export class DbMetricsCollector implements MetricsCollector {
     console.log(`✓ DbMetricsCollector initialized (instanceId: ${this.instanceId})`)
   }
 
-  recordRequestStart(backendId: string, requestId: string): void {
-    this.activeRequests.set(requestId, {
-      backendId,
-      startTime: Date.now()
-    })
-  }
-
   async recordRequestComplete(data: RequestCompleteData): Promise<void> {
     // Fire-and-forget: don't await, don't block request flow
     this.insertMetricAsync(data).catch((error) => {
       console.error('Failed to record metric:', error)
     })
-
-    // Clean up active request tracking
-    this.activeRequests.delete(data.requestId)
   }
 
   private async insertMetricAsync(data: RequestCompleteData): Promise<void> {
@@ -99,7 +87,6 @@ export class DbMetricsCollector implements MetricsCollector {
   }
 
   async shutdown(): Promise<void> {
-    console.log(`DbMetricsCollector shutdown (${this.activeRequests.size} active requests)`)
-    this.activeRequests.clear()
+    console.log('DbMetricsCollector shutdown')
   }
 }

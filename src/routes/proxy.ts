@@ -4,6 +4,7 @@ import { loadBalancer } from '../services/load-balancer.js'
 import { configManager } from '../services/config-manager.js'
 import { requestRecorder } from '../services/request-recorder.js'
 import { affinityManager } from '../services/affinity-manager.js'
+import { concurrencyLimiter } from '../services/concurrency-limiter.js'
 import { getMetricsCollector } from '../index.js'
 import { randomUUID } from 'crypto'
 import type { ChatCompletionRequest, BackendConfig } from '../types/backend.js'
@@ -13,6 +14,13 @@ import { proxyAuth } from '../middleware/auth.js'
 import { proxy } from 'hono/proxy'
 import type { Context } from 'hono'
 import type { BlankInput } from 'hono/types'
+import {
+  PROXY_CONSTANTS,
+  createErrorResponse,
+  recordMetricsFailure,
+  recordMetricsSuccess,
+  executeWithTTFTTimeout,
+} from './proxy-helpers.js'
 
 const proxyApp = new Hono<{ Variables: Variables }>()
 
@@ -47,6 +55,46 @@ function getOrderedBackendsForFallback(
 }
 
 /**
+ * Wrapper to handle unexpected errors in response processing functions
+ * Automatically logs errors, records metrics, and returns standardized error responses
+ */
+async function withResponseErrorHandling<T>(
+  handler: () => Promise<T>,
+  context: {
+    currentBackend: BackendConfig
+    requestId: string
+    requestStartTime: number
+    model: string
+    errorType: string
+    errorMessage: string
+  }
+): Promise<T> {
+  try {
+    return await handler()
+  } catch (error) {
+    console.error(`[Proxy] Unexpected error in response processing for backend ${context.currentBackend.id}:`, error)
+    recordMetricsFailure(
+      context.currentBackend.id,
+      context.requestId,
+      context.requestStartTime,
+      context.model,
+      context.errorType
+    )
+    // Return a standardized error response
+    return {
+      success: false,
+      error: context.errorMessage,
+      response: createErrorResponse(
+        context.errorMessage,
+        PROXY_CONSTANTS.ERROR_TYPES.INTERNAL_ERROR,
+        context.errorType,
+        PROXY_CONSTANTS.HTTP_INTERNAL_ERROR
+      )
+    } as T
+  }
+}
+
+/**
  * Handle streaming response with TTFT timeout support
  * Returns { success: true, response } on success
  * Returns { success: false, error } on TTFT timeout (for fallback)
@@ -59,29 +107,26 @@ async function handleStreamingResponse(
   requestId: string,
   model: string
 ): Promise<{ success: boolean; response?: Response; error?: string }> {
-  const metricsCollector = getMetricsCollector()
   const reader = response.body?.getReader()
+
+  // Validate response has body
   if (!reader) {
-    const duration = Date.now() - requestStartTime
-    metricsCollector.recordRequestComplete({
-      backendId: currentBackend.id,
+    recordMetricsFailure(
+      currentBackend.id,
       requestId,
-      status: 'failure',
-      duration,
+      requestStartTime,
       model,
-      errorType: 'no_response_body'
-    })
-    console.log(`[Proxy] Backend ${currentBackend.id} has no response body`)
+      PROXY_CONSTANTS.ERROR_CODES.NO_RESPONSE_BODY
+    )
     return {
       success: false,
       error: 'No response body',
-      response: new Response(JSON.stringify({
-        error: {
-          message: 'No response body',
-          type: 'backend_error',
-          code: 'no_response_body'
-        }
-      }), { status: 500 })
+      response: createErrorResponse(
+        'No response body',
+        PROXY_CONSTANTS.ERROR_TYPES.BACKEND_ERROR,
+        PROXY_CONSTANTS.ERROR_CODES.NO_RESPONSE_BODY,
+        PROXY_CONSTANTS.HTTP_INTERNAL_ERROR
+      )
     }
   }
 
@@ -89,97 +134,44 @@ async function handleStreamingResponse(
   let firstTokenTime: number | undefined
   let firstChunk: Uint8Array | undefined
 
-  // Set up TTFT timeout if configured (both 0 and undefined mean no timeout)
+  // Wait for first chunk with TTFT timeout if configured
   const ttftTimeout = currentBackend.streamingTTFTTimeout
-
-  // Wait for first chunk with timeout BEFORE starting to stream to client
-  // This allows us to fallback if TTFT timeout occurs
   if (ttftTimeout && ttftTimeout > 0) {
-    // Calculate remaining timeout based on time already elapsed
-    const elapsedTime = Date.now() - requestStartTime
-    const remainingTimeout = Math.max(0, ttftTimeout - elapsedTime)
+    const timeoutResult = await executeWithTTFTTimeout(
+      () => reader.read(),
+      ttftTimeout,
+      { currentBackend, requestId, requestStartTime, model }
+    )
 
-    if (remainingTimeout === 0) {
-      // Already exceeded timeout
-      const duration = Date.now() - requestStartTime
-      metricsCollector.recordRequestComplete({
-        backendId: currentBackend.id,
-        requestId,
-        status: 'failure',
-        duration,
-        model,
-        errorType: 'ttft_timeout'
+    if (!timeoutResult.success) {
+      // Timeout occurred
+      reader.cancel('TTFT timeout exceeded').catch((err) => {
+        console.warn(`[Proxy] Failed to cancel reader for backend ${currentBackend.id}:`, err)
       })
-      console.log(`[Proxy] Backend ${currentBackend.id} TTFT timeout before first read (${duration}ms)`)
-      reader.cancel('TTFT timeout exceeded')
       return {
         success: false,
         error: 'Streaming TTFT timeout exceeded',
-        response: new Response(JSON.stringify({
-          error: {
-            message: 'Streaming TTFT timeout exceeded',
-            type: 'timeout_error',
-            code: 'ttft_timeout'
-          }
-        }), { status: 504 })
+        response: timeoutResult.response
       }
     }
 
-    // Wait for first chunk with timeout using Promise.race
-    const timeoutPromise = new Promise<{ timedOut: true; value?: undefined }>((resolve) => {
-      setTimeout(() => resolve({ timedOut: true }), remainingTimeout)
-    })
+    const readResult = timeoutResult.result!
 
-    const readPromise = reader.read().then(result => ({ timedOut: false, ...result }))
-
-    const result = await Promise.race([readPromise, timeoutPromise])
-
-    if (result.timedOut) {
-      // Timeout occurred before first chunk
-      const duration = Date.now() - requestStartTime
-      metricsCollector.recordRequestComplete({
-        backendId: currentBackend.id,
+    // Check if stream ended immediately (empty response)
+    if (readResult.done) {
+      recordMetricsSuccess(
+        currentBackend.id,
         requestId,
-        status: 'failure',
-        duration,
+        requestStartTime,
         model,
-        errorType: 'ttft_timeout'
-      })
-      console.log(`[Proxy] Backend ${currentBackend.id} TTFT timeout waiting for first chunk (${duration}ms)`)
-      reader.cancel('TTFT timeout exceeded')
-      return {
-        success: false,
-        error: 'Streaming TTFT timeout exceeded',
-        response: new Response(JSON.stringify({
-          error: {
-            message: 'Streaming TTFT timeout exceeded',
-            type: 'timeout_error',
-            code: 'ttft_timeout'
-          }
-        }), { status: 504 })
-      }
-    }
-
-    // First chunk received successfully
-    if (result.done) {
-      // Stream ended immediately (empty response)
-      const duration = Date.now() - requestStartTime
-      metricsCollector.recordRequestComplete({
-        backendId: currentBackend.id,
-        requestId,
-        status: 'success',
-        duration,
-        ttft: duration,
-        streamType: 'streaming',
-        model
-      })
-      console.log(`[Proxy] Backend ${currentBackend.id} returned empty streaming response`)
+        Date.now() - requestStartTime,
+        'streaming'
+      )
       return { success: true, response: c.body(null) }
     }
 
-    firstChunk = result.value
+    firstChunk = readResult.value
     firstTokenTime = Date.now() - requestStartTime
-    console.log(`[Proxy] Backend ${currentBackend.id} first chunk received in ${firstTokenTime}ms`)
   }
 
   // Now start streaming to client (first chunk already validated if timeout was set)
@@ -210,29 +202,24 @@ async function handleStreamingResponse(
       }
 
       // Record success with TTFT and duration
-      const duration = Date.now() - requestStartTime
-      metricsCollector.recordRequestComplete({
-        backendId: currentBackend.id,
+      recordMetricsSuccess(
+        currentBackend.id,
         requestId,
-        status: 'success',
-        duration,
-        ttft: firstTokenTime,
-        streamType: 'streaming',
-        model
-      })
-      console.log(`[Proxy] Backend ${currentBackend.id} streaming completed successfully (TTFT: ${firstTokenTime}ms, total: ${duration}ms)`)
+        requestStartTime,
+        model,
+        firstTokenTime,
+        'streaming'
+      )
+      const duration = Date.now() - requestStartTime
     } catch (error) {
       // Stream interrupted
-      const duration = Date.now() - requestStartTime
-      metricsCollector.recordRequestComplete({
-        backendId: currentBackend.id,
+      recordMetricsFailure(
+        currentBackend.id,
         requestId,
-        status: 'failure',
-        duration,
+        requestStartTime,
         model,
-        errorType: 'stream_interrupted'
-      })
-      console.log(`[Proxy] Backend ${currentBackend.id} streaming interrupted:`, error)
+        PROXY_CONSTANTS.ERROR_CODES.STREAM_INTERRUPTED
+      )
       throw error
     }
   })
@@ -253,76 +240,27 @@ async function handleNonStreamingResponse(
   requestId: string,
   model: string
 ): Promise<{ success: boolean; response?: Response; error?: string }> {
-  const metricsCollector = getMetricsCollector()
-  // Both 0 and undefined mean no timeout
   const ttftTimeout = currentBackend.nonStreamingTTFTTimeout
 
+  // Parse JSON with TTFT timeout if configured
   let responseBody
   if (ttftTimeout && ttftTimeout > 0) {
-    // Calculate remaining timeout based on time already elapsed
-    const elapsedTime = Date.now() - requestStartTime
-    const remainingTimeout = Math.max(0, ttftTimeout - elapsedTime)
+    const timeoutResult = await executeWithTTFTTimeout(
+      () => response.json(),
+      ttftTimeout,
+      { currentBackend, requestId, requestStartTime, model }
+    )
 
-    if (remainingTimeout === 0) {
-      // Already exceeded timeout
-      const duration = Date.now() - requestStartTime
-      metricsCollector.recordRequestComplete({
-        backendId: currentBackend.id,
-        requestId,
-        status: 'failure',
-        duration,
-        model,
-        errorType: 'ttft_timeout'
-      })
-      console.log(`[Proxy] Backend ${currentBackend.id} non-streaming TTFT timeout before read (${duration}ms)`)
-      return {
-        success: false,
-        error: 'Non-streaming TTFT timeout exceeded',
-        response: new Response(JSON.stringify({
-          error: {
-            message: 'Non-streaming TTFT timeout exceeded',
-            type: 'timeout_error',
-            code: 'ttft_timeout'
-          }
-        }), { status: 504 })
-      }
-    }
-
-    // Use Promise.race to implement timeout with remaining time
-    const timeoutPromise = new Promise<{ timedOut: true; body?: null }>((resolve) => {
-      setTimeout(() => resolve({ timedOut: true, body: null }), remainingTimeout)
-    })
-
-    const jsonPromise = response.json().then(body => ({ timedOut: false, body }))
-
-    const result = await Promise.race([jsonPromise, timeoutPromise])
-
-    if (result.timedOut) {
+    if (!timeoutResult.success) {
       // Timeout occurred
-      const duration = Date.now() - requestStartTime
-      metricsCollector.recordRequestComplete({
-        backendId: currentBackend.id,
-        requestId,
-        status: 'failure',
-        duration,
-        model,
-        errorType: 'ttft_timeout'
-      })
-      console.log(`[Proxy] Backend ${currentBackend.id} non-streaming TTFT timeout (${duration}ms)`)
       return {
         success: false,
         error: 'Non-streaming TTFT timeout exceeded',
-        response: new Response(JSON.stringify({
-          error: {
-            message: 'Non-streaming TTFT timeout exceeded',
-            type: 'timeout_error',
-            code: 'ttft_timeout'
-          }
-        }), { status: 504 })
+        response: timeoutResult.response
       }
     }
 
-    responseBody = result.body
+    responseBody = timeoutResult.result
   } else {
     // No timeout configured
     responseBody = await response.json()
@@ -330,34 +268,47 @@ async function handleNonStreamingResponse(
 
   // For non-streaming, TTFT and duration are the same
   const duration = Date.now() - requestStartTime
-  metricsCollector.recordRequestComplete({
-    backendId: currentBackend.id,
+  recordMetricsSuccess(
+    currentBackend.id,
     requestId,
-    status: 'success',
+    requestStartTime,
+    model,
     duration,
-    ttft: duration,
-    streamType: 'non-streaming',
-    model
-  })
-
-  console.log(`[Proxy] Backend ${currentBackend.id} non-streaming request succeeded (${duration}ms)`)
+    'non-streaming'
+  )
   return { success: true, response: c.json(responseBody) }
 }
 
 /**
  * Try to make a request to a backend
  * Returns { success: true, response, startTime } on success
- * Returns { success: false, response, error } on failure
+ * Returns { success: false, response, error, atCapacity } on failure
  */
 async function tryBackendRequest(
   backend: BackendConfig,
   requestBody: ChatCompletionRequest,
   headers: Record<string, string>,
   requestId: string
-): Promise<{ success: boolean; response: Response; startTime?: number; error?: any }> {
+): Promise<{ success: boolean; response: Response; startTime?: number; error?: any; atCapacity?: boolean }> {
   const metricsCollector = getMetricsCollector()
   const startTime = Date.now()
-  metricsCollector.recordRequestStart(backend.id, requestId)
+
+  // Use concurrencyLimiter to enforce concurrency limits if configured
+  const allowed = await concurrencyLimiter.tryAcquire(backend, requestId)
+
+  if (!allowed) {
+    console.log(`[Proxy] Backend ${backend.id} is at capacity (${backend.maxConcurrentRequests})`)
+    return {
+      success: false,
+      atCapacity: true,
+      response: createErrorResponse(
+        `Backend ${backend.id} is at capacity`,
+        PROXY_CONSTANTS.ERROR_TYPES.RATE_LIMIT_ERROR,
+        PROXY_CONSTANTS.ERROR_CODES.ALL_BACKENDS_AT_CAPACITY,
+        PROXY_CONSTANTS.HTTP_TOO_MANY_REQUESTS
+      )
+    }
+  }
 
   try {
     // Use backend-specific model if configured
@@ -392,29 +343,25 @@ async function tryBackendRequest(
       return { success: true, response, startTime }
     } else {
       // Non-2xx response, record failure
-      const duration = Date.now() - startTime
-      metricsCollector.recordRequestComplete({
-        backendId: backend.id,
+      recordMetricsFailure(
+        backend.id,
         requestId,
-        status: 'failure',
-        duration,
-        model: requestBody.model,
-        errorType: `http_${response.status}`
-      })
+        startTime,
+        requestBody.model,
+        `http_${response.status}`
+      )
       console.log(`[Proxy] Backend ${backend.id} returned non-2xx status: ${response.status}`)
       return { success: false, response }
     }
   } catch (error) {
     // Network error or other exception
-    const duration = Date.now() - startTime
-    metricsCollector.recordRequestComplete({
-      backendId: backend.id,
+    recordMetricsFailure(
+      backend.id,
       requestId,
-      status: 'failure',
-      duration,
-      model: requestBody.model,
-      errorType: 'network_error'
-    })
+      startTime,
+      requestBody.model,
+      PROXY_CONSTANTS.ERROR_CODES.NETWORK_ERROR
+    )
     console.log(`[Proxy] Backend ${backend.id} request failed:`, error)
     return { success: false, response: new Response(null, { status: 500 }), error }
   }
@@ -499,9 +446,29 @@ proxyApp.post('/chat/completions', async (c) => {
         // Handle streaming or non-streaming response
         let handleResult
         if (requestBody.stream) {
-          handleResult = await handleStreamingResponse(c, response, currentBackend, requestStartTime, requestId, requestBody.model)
+          handleResult = await withResponseErrorHandling(
+            () => handleStreamingResponse(c, response, currentBackend, requestStartTime, requestId, requestBody.model),
+            {
+              currentBackend,
+              requestId,
+              requestStartTime,
+              model: requestBody.model,
+              errorType: 'streaming_processing_error',
+              errorMessage: 'Streaming processing error'
+            }
+          )
         } else {
-          handleResult = await handleNonStreamingResponse(c, response, currentBackend, requestStartTime, requestId, requestBody.model)
+          handleResult = await withResponseErrorHandling(
+            () => handleNonStreamingResponse(c, response, currentBackend, requestStartTime, requestId, requestBody.model),
+            {
+              currentBackend,
+              requestId,
+              requestStartTime,
+              model: requestBody.model,
+              errorType: 'non_streaming_processing_error',
+              errorMessage: 'Non-streaming processing error'
+            }
+          )
         }
 
         // Check if processing succeeded
@@ -528,9 +495,13 @@ proxyApp.post('/chat/completions', async (c) => {
         lastResponse = handleResult.response!
         // Continue to fallback logic below
       } else {
-        // Request failed, try fallback
+        // Request failed or at capacity, try fallback
         lastResponse = result.response
-        console.log(`[Proxy] Backend ${currentBackend.id} request failed, attempting fallback`)
+        if (result.atCapacity) {
+          console.log(`[Proxy] Backend ${currentBackend.id} is at capacity, attempting fallback`)
+        } else {
+          console.log(`[Proxy] Backend ${currentBackend.id} request failed, attempting fallback`)
+        }
       }
 
       // Get next backends to try

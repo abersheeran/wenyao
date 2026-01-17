@@ -2,11 +2,23 @@ import type { ModelConfig, BackendConfig } from '../types/backend.js'
 import { mongoDBService } from './mongodb.js'
 import { affinityManager } from './affinity-manager.js'
 
+/**
+ * Config Manager
+ *
+ * Manages model and backend configurations.
+ * Supports synchronization with MongoDB and real-time watching of changes.
+ * Provides lookup methods for load balancing and affinity-based routing.
+ */
 export class ConfigManager {
+  /** Map of model names to their configurations */
   private modelConfigs: Map<string, ModelConfig> = new Map()
+  /** Flag indicating if the manager is currently synchronized with MongoDB */
   private usesMongoDB: boolean = false
 
-  // Initialize from MongoDB
+  /**
+   * Initializes configurations from MongoDB.
+   * If MongoDB is not connected, it falls back to in-memory storage.
+   */
   async initializeFromMongoDB(): Promise<void> {
     if (!mongoDBService.isConnected()) {
       console.log('MongoDB not connected, using in-memory storage')
@@ -33,7 +45,10 @@ export class ConfigManager {
     }
   }
 
-  // Watch for MongoDB changes
+  /**
+   * Starts watching for configuration changes in MongoDB.
+   * Updates the local cache in real-time when changes occur in the database.
+   */
   private async startWatchingChanges(): Promise<void> {
     await mongoDBService.watchModels((modelConfig, operationType) => {
       switch (operationType) {
@@ -51,17 +66,25 @@ export class ConfigManager {
     })
   }
 
-  // Get all model configurations
+  /**
+   * Returns all model configurations.
+   */
   getAllModels(): ModelConfig[] {
     return Array.from(this.modelConfigs.values())
   }
 
-  // Get model configuration by model name
+  /**
+   * Gets configuration for a specific model.
+   * @param model - The name of the model
+   */
   getModelConfig(model: string): ModelConfig | undefined {
     return this.modelConfigs.get(model)
   }
 
-  // Get enabled backends for a specific model
+  /**
+   * Gets all enabled backends for a model.
+   * @param model - The name of the model
+   */
   getEnabledBackends(model: string): BackendConfig[] {
     const modelConfig = this.modelConfigs.get(model)
     if (!modelConfig) {
@@ -70,17 +93,28 @@ export class ConfigManager {
     return modelConfig.backends.filter(backend => backend.enabled)
   }
 
-  // Get all enabled backends including those with weight=0 (for fallback)
+  /**
+   * Alias for getEnabledBackends.
+   * @param model - The name of the model
+   */
   getAllEnabledBackends(model: string): BackendConfig[] {
     return this.getEnabledBackends(model)
   }
 
-  // Get backends for load balancer selection (excluding weight=0)
+  /**
+   * Gets backends available for load balancer selection.
+   * Excludes enabled backends with weight=0.
+   * @param model - The name of the model
+   */
   getBackendsForSelection(model: string): BackendConfig[] {
     return this.getEnabledBackends(model).filter(backend => backend.weight > 0)
   }
 
-  // Get specific backend by model and backend ID
+  /**
+   * Gets a specific backend by its ID for a given model.
+   * @param model - The name of the model
+   * @param backendId - The unique ID of the backend
+   */
   getBackend(model: string, backendId: string): BackendConfig | undefined {
     const modelConfig = this.modelConfigs.get(model)
     if (!modelConfig) {
@@ -89,7 +123,11 @@ export class ConfigManager {
     return modelConfig.backends.find(backend => backend.id === backendId)
   }
 
-  // Add a new model configuration
+  /**
+   * Adds a new model configuration.
+   * Persists to MongoDB if available.
+   * @param config - The model configuration to add
+   */
   async addModelConfig(config: ModelConfig): Promise<ModelConfig> {
     if (this.modelConfigs.has(config.model)) {
       throw new Error(`Model configuration for ${config.model} already exists`)
