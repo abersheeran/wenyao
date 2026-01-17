@@ -3,6 +3,7 @@ import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Switch } from "../../ui/switch";
+import { Spinner } from "../../ui/spinner";
 import { useAdminApi, type StatsDataPoint } from "~/apis";
 import { HistoricalCharts } from "./historical-charts";
 
@@ -81,6 +82,7 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
             </SelectContent>
           </Select>
           <Button variant="outline" onClick={loadHistory} disabled={historyState.loading}>
+            {historyState.loading ? <Spinner /> : <></> }
             刷新
           </Button>
           <div className="flex items-center gap-2 ml-1">
@@ -97,10 +99,12 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
       {historyState.error && (
         <p className="text-sm text-red-600 mb-2">{historyState.error.message}</p>
       )}
-      {historyState.loading ? (
-        <p className="text-sm text-gray-500">加载中...</p>
-      ) : Object.keys(historyData).length === 0 ? (
-        <p className="text-sm text-gray-500">暂无历史数据</p>
+      {Object.keys(historyData).length === 0 ? (
+        historyState.loading ? (
+          <p className="text-sm text-gray-500">加载中...</p>
+        ) : (
+          <p className="text-sm text-gray-500">暂无历史数据</p>
+        )
       ) : (
         <div className="space-y-8">
           <HistoricalCharts historyData={historyData} />
