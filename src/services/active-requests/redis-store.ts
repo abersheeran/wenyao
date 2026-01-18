@@ -167,7 +167,8 @@ export class RedisActiveRequestStore implements ActiveRequestStore {
       for (let i = 0; i < keys.length; i++) {
         const key = keys[i]
         const backendId = key.split(':')[1]
-        counts[backendId] = results[i] as number
+        const count = results[i]
+        counts[backendId] = typeof count === 'number' ? count : 0
       }
 
       return counts
