@@ -164,6 +164,7 @@ export class MongoDBService {
 
     this.changeStream = collection.watch([], {
       fullDocument: 'updateLookup',
+      fullDocumentBeforeChange: 'whenAvailable',
     })
 
     console.log('Watching MongoDB for model configuration changes...')
@@ -174,19 +175,10 @@ export class MongoDBService {
           case 'insert':
           case 'update':
           case 'replace':
-            if ('fullDocument' in change && change.fullDocument) {
-              onChange(change.fullDocument as ModelConfig, change.operationType)
-            }
+            onChange(change.fullDocument as ModelConfig, change.operationType)
             break
           case 'delete':
-            if ('documentKey' in change && change.documentKey) {
-              // For delete, we might only have the ID or indexed fields depending on config
-              // Here we pass a partial object as the actual config is gone
-              onChange(
-                { model: (change.documentKey as any).model?.toString() || 'unknown' } as any,
-                'delete'
-              )
-            }
+            onChange(change.fullDocumentBeforeChange as ModelConfig, 'delete')
             break
         }
       } catch (error) {
