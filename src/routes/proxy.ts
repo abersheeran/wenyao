@@ -128,6 +128,7 @@ async function tryBackendRequest(
     if (response.ok) {
       return { success: true, response, startTime }
     } else {
+      console.warn(`[${requestId}] Backend ${backend.id} returned status ${response.status}`)
       // Non-2xx response, record failure
       recordMetricsFailure(
         backend.id,
@@ -139,6 +140,7 @@ async function tryBackendRequest(
       return { success: false, response }
     }
   } catch (error) {
+    console.error(`[${requestId}] Error requesting backend ${backend.id}:`, error)
     // Network error or other exception
     recordMetricsFailure(
       backend.id,

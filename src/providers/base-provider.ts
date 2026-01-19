@@ -299,6 +299,10 @@ function WithResponseErrorHandling(
     try {
       return await originalMethod.call(this, context, response)
     } catch (error) {
+      console.error(
+        `[Provider] Unexpected error in response handling for backend ${context.backend.id}:`,
+        error
+      )
       recordMetricsFailure(
         context.backend.id,
         context.requestId,
@@ -455,7 +459,7 @@ export abstract class BaseProvider {
     // Wait for first chunk with TTFT timeout if configured
     const ttftTimeout = backend.streamingTTFTTimeout
     if (ttftTimeout && ttftTimeout > 0) {
-      const timeoutResult = await executeWithTTFTTimeout(reader.read, ttftTimeout, {
+      const timeoutResult = await executeWithTTFTTimeout(() => reader.read(), ttftTimeout, {
         currentBackend: backend,
         requestId,
         requestStartTime,

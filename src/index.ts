@@ -89,8 +89,6 @@ async function startServer() {
       console.log(`\n🚀 文鳐 is running!`)
       console.log(`- Instance ID: ${instanceManager.getInstanceId()}`)
       console.log(`- Port: ${info.port}`)
-      console.log(`- Admin Panel: http://localhost:${info.port}/admin`)
-      console.log(`- Proxy API: http://localhost:${info.port}/v1/chat/completions`)
       console.log(`- Metrics: ${metricsCollector.isEnabled() ? 'Enabled' : 'Disabled'}`)
       console.log(`- Active Store: ${resolvedStoreType}\n`)
     }
