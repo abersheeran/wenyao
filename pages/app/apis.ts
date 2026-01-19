@@ -1,9 +1,22 @@
 export type LoadBalancingStrategy = 'weighted' | 'lowest-ttft' | 'min-error-rate';
 
-export type BackendConfig = {
-  id: string;
+export type ProviderType = 'openai' | 'bedrock';
+
+export type OpenAIConfig = {
   url: string;
   apiKey: string;
+};
+
+export type BedrockConfig = {
+  region: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+};
+
+export type BackendConfig = {
+  id: string;
+  provider: ProviderType;
   weight: number;
   enabled: boolean;
   model?: string; // Optional: Override the model name when forwarding to this backend
@@ -11,6 +24,8 @@ export type BackendConfig = {
   nonStreamingTTFTTimeout?: number; // Optional: TTFT timeout in milliseconds for non-streaming requests
   recordRequests?: boolean; // Optional: Record all requests (URL, headers, body) to MongoDB
   maxConcurrentRequests?: number; // Optional: Maximum concurrent requests (undefined/0 = no limit, >0 = specific limit)
+  openaiConfig?: OpenAIConfig;
+  bedrockConfig?: BedrockConfig;
 };
 
 export type MinErrorRateOptions = {
@@ -22,6 +37,7 @@ export type MinErrorRateOptions = {
 
 export type ModelConfig = {
   model: string;
+  provider: ProviderType;
   backends: BackendConfig[];
   loadBalancingStrategy: LoadBalancingStrategy;
   minErrorRateOptions?: MinErrorRateOptions;

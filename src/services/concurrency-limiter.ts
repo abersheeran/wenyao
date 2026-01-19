@@ -33,11 +33,7 @@ export class ConcurrencyLimiter {
     }
 
     try {
-      return await this.store.tryRecordStart(
-        backend.id,
-        requestId,
-        backend.maxConcurrentRequests
-      )
+      return await this.store.tryRecordStart(backend.id, requestId, backend.maxConcurrentRequests)
     } catch (error) {
       console.error(`[ConcurrencyLimiter] Error trying to acquire slot for ${backend.id}:`, error)
       return true // Fail open on storage errors

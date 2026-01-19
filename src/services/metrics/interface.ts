@@ -1,5 +1,5 @@
+import type { HistoryQueryParams, RequestCompleteData, TimeWindow } from './types.js'
 import type { BackendStats, StatsDataPoint } from '../../types/backend.js'
-import type { RequestCompleteData, TimeWindow, HistoryQueryParams } from './types.js'
 
 /**
  * MetricsCollector interface - defines the contract for metrics collection

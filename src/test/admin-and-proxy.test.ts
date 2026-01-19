@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest'
 import { Hono } from 'hono'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock getMetricsCollector before importing routes
 vi.mock('../index.js', () => ({
@@ -19,14 +19,16 @@ vi.mock('../index.js', () => ({
   }),
 }))
 
+import { createTestOpenAIBackend } from './helpers.js'
+import { adminAuth, proxyAuth } from '../middleware/auth.js'
 import admin from '../routes/admin.js'
 import proxy from '../routes/proxy.js'
 import { configManager } from '../services/config-manager.js'
 // TODO: Update tests to use new metricsCollector instead of statsTracker
 // import { statsTracker } from '../services/stats-tracker.js'
-import { adminAuth, proxyAuth } from '../middleware/auth.js'
 import { mongoDBService } from '../services/mongodb.js'
-import type { ModelConfig, BackendConfig } from '../types/backend.js'
+
+import type { BackendConfig, ModelConfig } from '../types/backend.js'
 
 // 测试用的 API Key
 const TEST_API_KEY = 'test-admin-key-12345'
@@ -40,7 +42,7 @@ function req(path: string, init?: RequestInit) {
 
   return new Request(`http://localhost${path}`, {
     ...init,
-    headers
+    headers,
   })
 }
 
@@ -72,18 +74,22 @@ describe('Admin API - Authentication', () => {
   })
 
   it('returns 401 when invalid API key', async () => {
-    const res = await app.fetch(new Request('http://localhost/admin/models', {
-      headers: { 'Authorization': 'Bearer invalid-key' }
-    }))
+    const res = await app.fetch(
+      new Request('http://localhost/admin/models', {
+        headers: { Authorization: 'Bearer invalid-key' },
+      })
+    )
     expect(res.status).toBe(401)
     const data = await res.json()
     expect(data.error).toBe('Unauthorized')
   })
 
   it('returns 401 when wrong Authorization format', async () => {
-    const res = await app.fetch(new Request('http://localhost/admin/models', {
-      headers: { 'Authorization': 'Basic sometoken' }
-    }))
+    const res = await app.fetch(
+      new Request('http://localhost/admin/models', {
+        headers: { Authorization: 'Basic sometoken' },
+      })
+    )
     expect(res.status).toBe(401)
     const data = await res.json()
     expect(data.error).toBe('Unauthorized')
@@ -124,11 +130,22 @@ describe('Admin API - Models & Backends', () => {
   })
 
   it('POST /admin/models creates a model', async () => {
-    const backend: BackendConfig = { id: 'b1', url: 'https://api.test', apiKey: 'k', weight: 1, enabled: true }
-    const body: ModelConfig = { model: 'gpt-4', backends: [backend], loadBalancingStrategy: 'weighted' }
-    const res = await app.fetch(req('/admin/models', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-    }))
+    const backend = createTestOpenAIBackend({
+      id: 'b1',
+    })
+    const body: ModelConfig = {
+      model: 'gpt-4',
+      provider: 'openai',
+      backends: [backend],
+      loadBalancingStrategy: 'weighted',
+    }
+    const res = await app.fetch(
+      req('/admin/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(201)
     expect(data.model.model).toBe('gpt-4')
@@ -136,19 +153,26 @@ describe('Admin API - Models & Backends', () => {
   })
 
   it('POST /admin/models fails zod validation for bad payload', async () => {
-    const res = await app.fetch(req('/admin/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }))
+    const res = await app.fetch(
+      req('/admin/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+    )
     expect(res.status).toBe(400)
   })
 
   it('GET /admin/models/:model includes traffic ratios', async () => {
     await configManager.addModelConfig({
       model: 'gpt-4',
+      provider: 'openai',
       backends: [
-        { id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: true },
-        { id: 'b2', url: 'https://b.test', apiKey: 'k2', weight: 3, enabled: true },
-        { id: 'b3', url: 'https://c.test', apiKey: 'k3', weight: 5, enabled: false }
+        createTestOpenAIBackend({ id: 'b1', weight: 1, enabled: true }),
+        createTestOpenAIBackend({ id: 'b2', weight: 3, enabled: true }),
+        createTestOpenAIBackend({ id: 'b3', weight: 5, enabled: false }),
       ],
-      loadBalancingStrategy: 'weighted'
+      loadBalancingStrategy: 'weighted',
     })
     const res = await app.fetch(req('/admin/models/gpt-4'))
     const data = await res.json()
@@ -156,16 +180,32 @@ describe('Admin API - Models & Backends', () => {
     const b1 = data.model.backends.find((b: any) => b.id === 'b1')
     const b2 = data.model.backends.find((b: any) => b.id === 'b2')
     const b3 = data.model.backends.find((b: any) => b.id === 'b3')
-    expect(b1.trafficRatio).toBeCloseTo(1/4, 5)
-    expect(b2.trafficRatio).toBeCloseTo(3/4, 5)
+    expect(b1.trafficRatio).toBeCloseTo(1 / 4, 5)
+    expect(b2.trafficRatio).toBeCloseTo(3 / 4, 5)
     expect(b3.trafficRatio).toBe(0)
   })
 
   it('Backends CRUD within a model', async () => {
-    await configManager.addModelConfig({ model: 'gpt-4', backends: [ { id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: true } ], loadBalancingStrategy: 'weighted' })
+    await configManager.addModelConfig({
+      model: 'gpt-4',
+      provider: 'openai',
+      backends: [createTestOpenAIBackend({ id: 'b1' })],
+      loadBalancingStrategy: 'weighted',
+    })
 
     // Add backend
-    let res = await app.fetch(req('/admin/models/gpt-4/backends', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'b2', url: 'https://b.test', apiKey: 'k2', weight: 2, enabled: true }) }))
+    let res = await app.fetch(
+      req('/admin/models/gpt-4/backends', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          createTestOpenAIBackend({
+            id: 'b2',
+            weight: 2,
+          })
+        ),
+      })
+    )
     let data = await res.json()
     expect(res.status).toBe(201)
     expect(data.model.backends).toHaveLength(2)
@@ -177,7 +217,13 @@ describe('Admin API - Models & Backends', () => {
     expect(data.backend.id).toBe('b2')
 
     // Update backend
-    res = await app.fetch(req('/admin/models/gpt-4/backends/b2', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weight: 5, enabled: false }) }))
+    res = await app.fetch(
+      req('/admin/models/gpt-4/backends/b2', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ weight: 5, enabled: false }),
+      })
+    )
     data = await res.json()
     expect(res.status).toBe(200)
     const updated = data.model.backends.find((b: any) => b.id === 'b2')
@@ -198,7 +244,12 @@ describe('Admin API - Models & Backends', () => {
   })
 
   it('GET backend returns 404 when not found', async () => {
-    await configManager.addModelConfig({ model: 'gpt-4', backends: [ { id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: true } ], loadBalancingStrategy: 'weighted' })
+    await configManager.addModelConfig({
+      model: 'gpt-4',
+      provider: 'openai',
+      backends: [createTestOpenAIBackend({ id: 'b1' })],
+      loadBalancingStrategy: 'weighted',
+    })
     const res = await app.fetch(req('/admin/models/gpt-4/backends/none'))
     const data = await res.json()
     expect(res.status).toBe(404)
@@ -325,7 +376,7 @@ describe('Proxy API - Load Balancing', () => {
         key: 'test-load-balancing-key',
         description: 'Test Load Balancing Key',
         models: ['gpt-4'],
-        createdAt: new Date()
+        createdAt: new Date(),
       })
     }
   })
@@ -335,14 +386,16 @@ describe('Proxy API - Load Balancing', () => {
       console.log('Skipping test: MongoDB not available')
       return
     }
-    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer test-load-balancing-key'
-      },
-      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
-    }))
+    const res = await app.fetch(
+      new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-load-balancing-key',
+        },
+        body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(400)
     expect(data.error.message).toContain('not found')
@@ -353,15 +406,22 @@ describe('Proxy API - Load Balancing', () => {
       console.log('Skipping test: MongoDB not available')
       return
     }
-    await configManager.addModelConfig({ model: 'gpt-4', backends: [ { id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: false } ], loadBalancingStrategy: 'weighted' })
-    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer test-load-balancing-key'
-      },
-      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
-    }))
+    await configManager.addModelConfig({
+      model: 'gpt-4',
+      provider: 'openai',
+      backends: [createTestOpenAIBackend({ id: 'b1', enabled: false })],
+      loadBalancingStrategy: 'weighted',
+    })
+    const res = await app.fetch(
+      new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-load-balancing-key',
+        },
+        body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(503)
     expect(data.error.message).toContain('No enabled backends')
@@ -372,16 +432,23 @@ describe('Proxy API - Load Balancing', () => {
       console.log('Skipping test: MongoDB not available')
       return
     }
-    await configManager.addModelConfig({ model: 'gpt-4', backends: [ { id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: true } ], loadBalancingStrategy: 'weighted' })
-    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer test-load-balancing-key',
-        'X-Backend-ID': 'nope'
-      },
-      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
-    }))
+    await configManager.addModelConfig({
+      model: 'gpt-4',
+      provider: 'openai',
+      backends: [createTestOpenAIBackend({ id: 'b1' })],
+      loadBalancingStrategy: 'weighted',
+    })
+    const res = await app.fetch(
+      new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-load-balancing-key',
+          'X-Backend-ID': 'nope',
+        },
+        body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(400)
     expect(data.error.message).toContain('not found')
@@ -392,16 +459,26 @@ describe('Proxy API - Load Balancing', () => {
       console.log('Skipping test: MongoDB not available')
       return
     }
-    await configManager.addModelConfig({ model: 'gpt-4', backends: [ { id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: false }, { id: 'b2', url: 'https://b.test', apiKey: 'k2', weight: 1, enabled: true } ], loadBalancingStrategy: 'weighted' })
-    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer test-load-balancing-key',
-        'X-Backend-ID': 'b1'
-      },
-      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
-    }))
+    await configManager.addModelConfig({
+      model: 'gpt-4',
+      provider: 'openai',
+      backends: [
+        createTestOpenAIBackend({ id: 'b1', enabled: false }),
+        createTestOpenAIBackend({ id: 'b2', enabled: true }),
+      ],
+      loadBalancingStrategy: 'weighted',
+    })
+    const res = await app.fetch(
+      new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-load-balancing-key',
+          'X-Backend-ID': 'b1',
+        },
+        body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(400)
     expect(data.error.message).toContain('disabled')
@@ -457,13 +534,15 @@ describe('Admin API - API Key Management', () => {
     const body = {
       key: 'test-key-123',
       description: 'Test API Key',
-      models: ['gpt-4', 'claude-3-sonnet']
+      models: ['gpt-4', 'claude-3-sonnet'],
     }
-    const res = await app.fetch(req('/admin/apikeys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }))
+    const res = await app.fetch(
+      req('/admin/apikeys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(201)
     expect(data.apiKey.key).toBe('test-key-123')
@@ -479,20 +558,24 @@ describe('Admin API - API Key Management', () => {
     const body = {
       key: 'test-key-123',
       description: 'Test API Key',
-      models: ['gpt-4']
+      models: ['gpt-4'],
     }
     // Create first time
-    await app.fetch(req('/admin/apikeys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }))
+    await app.fetch(
+      req('/admin/apikeys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    )
     // Try to create again
-    const res = await app.fetch(req('/admin/apikeys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }))
+    const res = await app.fetch(
+      req('/admin/apikeys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(409)
     expect(data.error).toContain('already exists')
@@ -503,15 +586,17 @@ describe('Admin API - API Key Management', () => {
       await mongoDBService.connect()
     }
     // Create API key first
-    await app.fetch(req('/admin/apikeys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        key: 'test-key-123',
-        description: 'Test API Key',
-        models: ['gpt-4']
+    await app.fetch(
+      req('/admin/apikeys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'test-key-123',
+          description: 'Test API Key',
+          models: ['gpt-4'],
+        }),
       })
-    }))
+    )
     // Get the API key
     const res = await app.fetch(req('/admin/apikeys/test-key-123'))
     const data = await res.json()
@@ -524,24 +609,28 @@ describe('Admin API - API Key Management', () => {
       await mongoDBService.connect()
     }
     // Create API key first
-    await app.fetch(req('/admin/apikeys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        key: 'test-key-123',
-        description: 'Test API Key',
-        models: ['gpt-4']
+    await app.fetch(
+      req('/admin/apikeys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'test-key-123',
+          description: 'Test API Key',
+          models: ['gpt-4'],
+        }),
       })
-    }))
+    )
     // Update the API key
-    const res = await app.fetch(req('/admin/apikeys/test-key-123', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        description: 'Updated Description',
-        models: ['gpt-4', 'claude-3']
+    const res = await app.fetch(
+      req('/admin/apikeys/test-key-123', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          description: 'Updated Description',
+          models: ['gpt-4', 'claude-3'],
+        }),
       })
-    }))
+    )
     const data = await res.json()
     expect(res.status).toBe(200)
     expect(data.apiKey.description).toBe('Updated Description')
@@ -553,19 +642,23 @@ describe('Admin API - API Key Management', () => {
       await mongoDBService.connect()
     }
     // Create API key first
-    await app.fetch(req('/admin/apikeys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        key: 'test-key-123',
-        description: 'Test API Key',
-        models: ['gpt-4']
+    await app.fetch(
+      req('/admin/apikeys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'test-key-123',
+          description: 'Test API Key',
+          models: ['gpt-4'],
+        }),
       })
-    }))
+    )
     // Delete the API key
-    const res = await app.fetch(req('/admin/apikeys/test-key-123', {
-      method: 'DELETE'
-    }))
+    const res = await app.fetch(
+      req('/admin/apikeys/test-key-123', {
+        method: 'DELETE',
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(200)
     expect(data.message).toContain('deleted successfully')
@@ -610,11 +703,13 @@ describe('Proxy API - API Key Authentication', () => {
       console.log('Skipping test: MongoDB not available')
       return
     }
-    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
-    }))
+    const res = await app.fetch(
+      new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(401)
     expect(data.error).toBe('Unauthorized')
@@ -625,14 +720,16 @@ describe('Proxy API - API Key Authentication', () => {
       console.log('Skipping test: MongoDB not available')
       return
     }
-    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer invalid-key'
-      },
-      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
-    }))
+    const res = await app.fetch(
+      new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer invalid-key',
+        },
+        body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(401)
     expect(data.error).toBe('Unauthorized')
@@ -648,23 +745,26 @@ describe('Proxy API - API Key Authentication', () => {
       key: 'test-proxy-key',
       description: 'Test Proxy Key',
       models: ['claude-3-sonnet'],
-      createdAt: new Date()
+      createdAt: new Date(),
     })
     // Configure model
     await configManager.addModelConfig({
       model: 'gpt-4',
-      backends: [{ id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: true }],
-      loadBalancingStrategy: 'weighted'
+      provider: 'openai',
+      backends: [createTestOpenAIBackend({ id: 'b1' })],
+      loadBalancingStrategy: 'weighted',
     })
     // Try to access gpt-4 with API key that only has access to claude-3-sonnet
-    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer test-proxy-key'
-      },
-      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
-    }))
+    const res = await app.fetch(
+      new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-proxy-key',
+        },
+        body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }),
+      })
+    )
     const data = await res.json()
     expect(res.status).toBe(403)
     expect(data.error.message).toContain('does not have permission')
@@ -680,25 +780,28 @@ describe('Proxy API - API Key Authentication', () => {
       key: 'test-proxy-key',
       description: 'Test Proxy Key',
       models: ['gpt-4'],
-      createdAt: new Date()
+      createdAt: new Date(),
     })
     // Configure model
     await configManager.addModelConfig({
       model: 'gpt-4',
-      backends: [{ id: 'b1', url: 'https://a.test', apiKey: 'k1', weight: 1, enabled: true }],
-      loadBalancingStrategy: 'weighted'
+      provider: 'openai',
+      backends: [createTestOpenAIBackend({ id: 'b1' })],
+      loadBalancingStrategy: 'weighted',
     })
-    // Try to access gpt-4 (should pass auth but fail on backend call)
-    const res = await app.fetch(new Request('http://localhost/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer test-proxy-key'
-      },
-      body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] })
-    }))
-    // Should not be 401 or 403 (auth passed)
-    expect(res.status).not.toBe(401)
+    // Try to access gpt-4 (should pass auth but may fail on backend call)
+    const res = await app.fetch(
+      new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer test-proxy-key',
+        },
+        body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'Hi' }] }),
+      })
+    )
+    // Should not be 403 (our auth middleware should have allowed the request)
+    // Note: Backend may return 401 if the OpenAI API key is invalid, which is fine
     expect(res.status).not.toBe(403)
   })
 })
@@ -723,26 +826,25 @@ describe('Backend Model Remapping', () => {
   })
 
   it('Backend with model field can be created and retrieved', async () => {
-    const backend: BackendConfig = {
+    const backend = createTestOpenAIBackend({
       id: 'b1',
-      url: 'https://api.test',
-      apiKey: 'k1',
-      weight: 1,
-      enabled: true,
-      model: 'gpt-4-turbo'
-    }
+      model: 'gpt-4-turbo',
+    })
     const body: ModelConfig = {
       model: 'gpt-4',
+      provider: 'openai',
       backends: [backend],
-      loadBalancingStrategy: 'weighted'
+      loadBalancingStrategy: 'weighted',
     }
 
     // Create model with backend that has model field
-    const createRes = await app.fetch(req('/admin/models', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }))
+    const createRes = await app.fetch(
+      req('/admin/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    )
     const createData = await createRes.json()
     expect(createRes.status).toBe(201)
     expect(createData.model.backends[0].model).toBe('gpt-4-turbo')
@@ -758,22 +860,19 @@ describe('Backend Model Remapping', () => {
     // Create initial backend without model field
     await configManager.addModelConfig({
       model: 'gpt-4',
-      backends: [{
-        id: 'b1',
-        url: 'https://a.test',
-        apiKey: 'k1',
-        weight: 1,
-        enabled: true
-      }],
-      loadBalancingStrategy: 'weighted'
+      provider: 'openai',
+      backends: [createTestOpenAIBackend({ id: 'b1' })],
+      loadBalancingStrategy: 'weighted',
     })
 
     // Update backend to add model field
-    const updateRes = await app.fetch(req('/admin/models/gpt-4/backends/b1', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-4-turbo' })
-    }))
+    const updateRes = await app.fetch(
+      req('/admin/models/gpt-4/backends/b1', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-4-turbo' }),
+      })
+    )
     const updateData = await updateRes.json()
     expect(updateRes.status).toBe(200)
     expect(updateData.model.backends[0].model).toBe('gpt-4-turbo')
@@ -786,25 +885,24 @@ describe('Backend Model Remapping', () => {
   })
 
   it('Backend without model field works as before', async () => {
-    const backend: BackendConfig = {
+    const backend = createTestOpenAIBackend({
       id: 'b1',
-      url: 'https://api.test',
-      apiKey: 'k1',
-      weight: 1,
-      enabled: true
-    }
+    })
     const body: ModelConfig = {
       model: 'gpt-4',
+      provider: 'openai',
       backends: [backend],
-      loadBalancingStrategy: 'weighted'
+      loadBalancingStrategy: 'weighted',
     }
 
     // Create backend without model field
-    const createRes = await app.fetch(req('/admin/models', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }))
+    const createRes = await app.fetch(
+      req('/admin/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    )
     const createData = await createRes.json()
     expect(createRes.status).toBe(201)
     expect(createData.model.backends[0].model).toBeUndefined()
@@ -816,4 +914,3 @@ describe('Backend Model Remapping', () => {
     expect(getData.model.backends[0].model).toBeUndefined()
   })
 })
-

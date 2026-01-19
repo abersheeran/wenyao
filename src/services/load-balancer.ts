@@ -1,6 +1,7 @@
-import type { BackendConfig, LoadBalancingStrategy, ModelConfig } from '../types/backend.js'
-import { configManager, type ConfigManager } from './config-manager.js'
 import { affinityManager } from './affinity-manager.js'
+import { configManager, type ConfigManager } from './config-manager.js'
+
+import type { BackendConfig, LoadBalancingStrategy, ModelConfig } from '../types/backend.js'
 import type { MetricsCollector } from './metrics/index.js'
 
 /**
@@ -45,7 +46,12 @@ export class LoadBalancer {
    * @param sessionId - Optional session ID for affinity
    * @returns Selected backend or null if no healthy backends are available.
    */
-  async selectBackend(model: string, forceBackendId?: string, isStream?: boolean, sessionId?: string): Promise<BackendConfig | null> {
+  async selectBackend(
+    model: string,
+    forceBackendId?: string,
+    isStream?: boolean,
+    sessionId?: string
+  ): Promise<BackendConfig | null> {
     const modelConfig = this.configManager.getModelConfig(model)
 
     if (!modelConfig) {
@@ -97,7 +103,11 @@ export class LoadBalancer {
   /**
    * Apply the configured load balancing strategy to select a backend
    */
-  private async applyStrategy(modelConfig: ModelConfig, enabledBackends: BackendConfig[], isStream?: boolean): Promise<BackendConfig> {
+  private async applyStrategy(
+    modelConfig: ModelConfig,
+    enabledBackends: BackendConfig[],
+    isStream?: boolean
+  ): Promise<BackendConfig> {
     switch (modelConfig.loadBalancingStrategy) {
       case 'weighted':
         return this.selectByWeight(enabledBackends)
@@ -121,7 +131,7 @@ export class LoadBalancer {
    */
   private selectByWeight(backends: BackendConfig[]): BackendConfig {
     // Filter out backends with weight=0
-    const eligibleBackends = backends.filter(b => b.weight > 0)
+    const eligibleBackends = backends.filter((b) => b.weight > 0)
 
     if (eligibleBackends.length === 0) {
       throw new Error('No backends with weight > 0 available for selection')
@@ -151,14 +161,19 @@ export class LoadBalancer {
    * Includes cold start protection: backends without data use average TTFT of other backends
    * Filters out backends with weight=0
    */
-  private async selectByLowestTTFT(backends: BackendConfig[], isStream?: boolean): Promise<BackendConfig> {
+  private async selectByLowestTTFT(
+    backends: BackendConfig[],
+    isStream?: boolean
+  ): Promise<BackendConfig> {
     // Check if metrics are available
     if (!this.metricsCollector || !this.metricsCollector.isEnabled()) {
-      throw new Error('Strategy \'lowest-ttft\' requires metrics to be enabled. Set ENABLE_METRICS=true or use another strategy.')
+      throw new Error(
+        "Strategy 'lowest-ttft' requires metrics to be enabled. Set ENABLE_METRICS=true or use another strategy."
+      )
     }
 
     // Filter out backends with weight=0
-    const eligibleBackends = backends.filter(b => b.weight > 0)
+    const eligibleBackends = backends.filter((b) => b.weight > 0)
 
     if (eligibleBackends.length === 0) {
       throw new Error('No backends with weight > 0 available for selection')
@@ -168,32 +183,37 @@ export class LoadBalancer {
     const useStreaming = isStream === true
 
     // Get recent stats for all eligible backends (15 minute window)
-    const backendStatsPromises = eligibleBackends.map(async backend => {
+    const backendStatsPromises = eligibleBackends.map(async (backend) => {
       const stats = await this.metricsCollector!.getRecentStats(backend.id, 15 * 60 * 1000) // 15 minutes in ms
 
       return {
         backend,
         stats,
-        hasData: stats.totalRequests > 0
+        hasData: stats.totalRequests > 0,
       }
     })
 
     const backendStats = await Promise.all(backendStatsPromises)
 
     // Calculate average TTFT for cold start protection
-    const backendsWithData = backendStats.filter(s => s.hasData)
-    const avgTTFT = backendsWithData.length > 0
-      ? backendsWithData.reduce((sum, s) => {
-          const ttft = useStreaming ? s.stats!.averageStreamingTTFT : s.stats!.averageNonStreamingTTFT
-          return sum + ttft
-        }, 0) / backendsWithData.length
-      : 1000 // Default to 1000ms if no backends have data
+    const backendsWithData = backendStats.filter((s) => s.hasData)
+    const avgTTFT =
+      backendsWithData.length > 0
+        ? backendsWithData.reduce((sum, s) => {
+            const ttft = useStreaming
+              ? s.stats!.averageStreamingTTFT
+              : s.stats!.averageNonStreamingTTFT
+            return sum + ttft
+          }, 0) / backendsWithData.length
+        : 1000 // Default to 1000ms if no backends have data
 
     // Assign TTFT values, using average for backends without data
-    const backendStatsWithTTFT = backendStats.map(stat => {
+    const backendStatsWithTTFT = backendStats.map((stat) => {
       let averageTTFT: number
       if (stat.hasData) {
-        averageTTFT = useStreaming ? stat.stats.averageStreamingTTFT : stat.stats.averageNonStreamingTTFT
+        averageTTFT = useStreaming
+          ? stat.stats.averageStreamingTTFT
+          : stat.stats.averageNonStreamingTTFT
       } else {
         // Cold start protection: use average TTFT
         averageTTFT = avgTTFT
@@ -201,7 +221,7 @@ export class LoadBalancer {
 
       return {
         backend: stat.backend,
-        averageTTFT
+        averageTTFT,
       }
     })
 
@@ -221,14 +241,19 @@ export class LoadBalancer {
    * - Configurable weight integration
    * Filters out backends with weight=0
    */
-  private async selectByMinErrorRate(backends: BackendConfig[], modelConfig: ModelConfig): Promise<BackendConfig> {
+  private async selectByMinErrorRate(
+    backends: BackendConfig[],
+    modelConfig: ModelConfig
+  ): Promise<BackendConfig> {
     // Check if metrics are available
     if (!this.metricsCollector || !this.metricsCollector.isEnabled()) {
-      throw new Error('Strategy \'min-error-rate\' requires metrics to be enabled. Set ENABLE_METRICS=true or use another strategy.')
+      throw new Error(
+        "Strategy 'min-error-rate' requires metrics to be enabled. Set ENABLE_METRICS=true or use another strategy."
+      )
     }
 
     // Filter out backends with weight=0
-    const eligibleBackends = backends.filter(b => b.weight > 0)
+    const eligibleBackends = backends.filter((b) => b.weight > 0)
 
     if (eligibleBackends.length === 0) {
       throw new Error('No backends with weight > 0 available for selection')
@@ -242,34 +267,40 @@ export class LoadBalancer {
     const TIME_WINDOW_MINUTES = options.timeWindowMinutes ?? 15
 
     // Get time-windowed stats for all eligible backends
-    const backendStatsPromises = eligibleBackends.map(async backend => {
-      const stats = await this.metricsCollector!.getRecentStats(backend.id, TIME_WINDOW_MINUTES * 60 * 1000) // Convert to ms
+    const backendStatsPromises = eligibleBackends.map(async (backend) => {
+      const stats = await this.metricsCollector!.getRecentStats(
+        backend.id,
+        TIME_WINDOW_MINUTES * 60 * 1000
+      ) // Convert to ms
       return {
         backend,
-        errorRate: (1 - stats.successRate), // Error rate = 1 - success rate
-        totalRequests: stats.totalRequests
+        errorRate: 1 - stats.successRate, // Error rate = 1 - success rate
+        totalRequests: stats.totalRequests,
       }
     })
 
     const backendStats = await Promise.all(backendStatsPromises)
 
     // Calculate average error rate for cold start protection
-    const backendsWithData = backendStats.filter(s => s.totalRequests >= MIN_REQUESTS)
-    const avgErrorRate = backendsWithData.length > 0
-      ? backendsWithData.reduce((sum, s) => sum + s.errorRate, 0) / backendsWithData.length
-      : 0.1 // Default to 10% if no backends have sufficient data
+    const backendsWithData = backendStats.filter((s) => s.totalRequests >= MIN_REQUESTS)
+    const avgErrorRate =
+      backendsWithData.length > 0
+        ? backendsWithData.reduce((sum, s) => sum + s.errorRate, 0) / backendsWithData.length
+        : 0.1 // Default to 10% if no backends have sufficient data
 
     // Filter out backends that should be circuit broken and calculate weights
     const weightsWithErrorRate = backendStats
-      .filter(stat => {
+      .filter((stat) => {
         // Circuit breaker: exclude backends with high error rate and sufficient data
         if (stat.totalRequests >= MIN_REQUESTS && stat.errorRate > CIRCUIT_BREAKER_THRESHOLD) {
-          console.log(`Circuit breaker triggered for backend ${stat.backend.id}: error rate ${(stat.errorRate * 100).toFixed(1)}% (threshold: ${(CIRCUIT_BREAKER_THRESHOLD * 100).toFixed(1)}%)`)
+          console.log(
+            `Circuit breaker triggered for backend ${stat.backend.id}: error rate ${(stat.errorRate * 100).toFixed(1)}% (threshold: ${(CIRCUIT_BREAKER_THRESHOLD * 100).toFixed(1)}%)`
+          )
           return false
         }
         return true
       })
-      .map(stat => {
+      .map((stat) => {
         let effectiveErrorRate: number
 
         // Cold start protection: use average error rate for backends with insufficient data
@@ -288,7 +319,7 @@ export class LoadBalancer {
           backend: stat.backend,
           weight,
           errorRate: stat.errorRate,
-          totalRequests: stat.totalRequests
+          totalRequests: stat.totalRequests,
         }
       })
 

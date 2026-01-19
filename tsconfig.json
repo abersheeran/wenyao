@@ -5,6 +5,7 @@
     "strict": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
+    "experimentalDecorators": true,
     "types": [
       "node"
     ],

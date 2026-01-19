@@ -17,7 +17,11 @@ export interface ActiveRequestStore {
    * @param maxLimit - Maximum concurrent requests allowed (undefined/0 = no limit)
    * @returns true if request was recorded (under limit), false if at/over capacity
    */
-  tryRecordStart(backendId: string, requestId: string, maxLimit: number | undefined): Promise<boolean>
+  tryRecordStart(
+    backendId: string,
+    requestId: string,
+    maxLimit: number | undefined
+  ): Promise<boolean>
 
   /**
    * Record that a request has started (without capacity check)

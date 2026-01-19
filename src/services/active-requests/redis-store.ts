@@ -1,5 +1,5 @@
-import type { RedisClientType } from 'redis'
 import type { ActiveRequestStore } from './interface.js'
+import type { RedisClientType } from 'redis'
 
 /**
  * Redis-based active request store (optimized version)
@@ -18,7 +18,10 @@ export class RedisActiveRequestStore implements ActiveRequestStore {
   private instanceId: string
   private ttl: number = 600 // 10 minutes in seconds
 
-  constructor(private redis: RedisClientType, instanceId: string) {
+  constructor(
+    private redis: RedisClientType,
+    instanceId: string
+  ) {
     this.instanceId = instanceId
   }
 
@@ -27,7 +30,11 @@ export class RedisActiveRequestStore implements ActiveRequestStore {
     console.log('✓ RedisActiveRequestStore initialized')
   }
 
-  async tryRecordStart(backendId: string, requestId: string, maxLimit: number | undefined): Promise<boolean> {
+  async tryRecordStart(
+    backendId: string,
+    requestId: string,
+    maxLimit: number | undefined
+  ): Promise<boolean> {
     // No limit configured (undefined or 0) - always allow
     if (maxLimit === undefined || maxLimit === 0) {
       await this.recordStart(backendId, requestId)
@@ -37,7 +44,7 @@ export class RedisActiveRequestStore implements ActiveRequestStore {
     const setKey = `active_requests:${backendId}`
     const instanceKey = `instance_requests:${this.instanceId}`
     const now = Date.now()
-    const expiryTime = now - (this.ttl * 1000)
+    const expiryTime = now - this.ttl * 1000
 
     // Lua script for atomic check-and-add
     // Strategy:
@@ -89,8 +96,8 @@ export class RedisActiveRequestStore implements ActiveRequestStore {
           now.toString(),
           expiryTime.toString(),
           this.ttl.toString(),
-          backendId
-        ]
+          backendId,
+        ],
       })
 
       return result === 1
@@ -128,14 +135,17 @@ export class RedisActiveRequestStore implements ActiveRequestStore {
       multi.sRem(instanceKey, `${backendId}:${requestId}`)
       await multi.exec()
     } catch (error: any) {
-      console.error(`Failed to recordComplete for requestId ${requestId} on backend ${backendId}:`, error.message)
+      console.error(
+        `Failed to recordComplete for requestId ${requestId} on backend ${backendId}:`,
+        error.message
+      )
     }
   }
 
   async getCount(backendId: string): Promise<number> {
     const setKey = `active_requests:${backendId}`
     const now = Date.now()
-    const expiryTime = now - (this.ttl * 1000)
+    const expiryTime = now - this.ttl * 1000
 
     try {
       // Periodic cleanup during getCount helps keep the set clean
@@ -202,7 +212,10 @@ export class RedisActiveRequestStore implements ActiveRequestStore {
       await multi.exec()
       return members.length
     } catch (error: any) {
-      console.error(`Failed to cleanup Redis active requests for instance ${instanceId}:`, error.message)
+      console.error(
+        `Failed to cleanup Redis active requests for instance ${instanceId}:`,
+        error.message
+      )
       return 0
     }
   }

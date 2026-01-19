@@ -1,31 +1,39 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest'
-import { MongoClient, Db } from 'mongodb'
+import { Db, MongoClient } from 'mongodb'
 import { createClient, type RedisClientType } from 'redis'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+
 import { createActiveRequestStore } from '../services/active-requests/index.js'
 import { MongoActiveRequestStore } from '../services/active-requests/mongo-store.js'
 import { RedisActiveRequestStore } from '../services/active-requests/redis-store.js'
+
 import type { ActiveRequestStore } from '../services/active-requests/interface.js'
 
 describe('ActiveRequestStore Factory', () => {
   it('throws error when mongodb type without db', () => {
-    expect(() => createActiveRequestStore({
-      type: 'mongodb',
-      instanceId: 'test-instance'
-    })).toThrow('MongoDB database instance is required')
+    expect(() =>
+      createActiveRequestStore({
+        type: 'mongodb',
+        instanceId: 'test-instance',
+      })
+    ).toThrow('MongoDB database instance is required')
   })
 
   it('throws error when redis type without client', () => {
-    expect(() => createActiveRequestStore({
-      type: 'redis',
-      instanceId: 'test-instance'
-    })).toThrow('Redis client is required')
+    expect(() =>
+      createActiveRequestStore({
+        type: 'redis',
+        instanceId: 'test-instance',
+      })
+    ).toThrow('Redis client is required')
   })
 
   it('throws error for unknown store type', () => {
-    expect(() => createActiveRequestStore({
-      type: 'unknown' as any,
-      instanceId: 'test-instance'
-    })).toThrow('Unknown active request store type')
+    expect(() =>
+      createActiveRequestStore({
+        type: 'unknown' as any,
+        instanceId: 'test-instance',
+      })
+    ).toThrow('Unknown active request store type')
   })
 })
 
@@ -57,19 +65,30 @@ describe('MongoActiveRequestStore', () => {
   beforeEach(async () => {
     if (!db) return
 
+    // Shutdown previous store if exists
+    if (store) {
+      await store.shutdown()
+    }
+
     // Clean up collection before each test
     try {
       await db.collection('active_requests').deleteMany({})
     } catch (error) {
-      // Collection might not exist
+      // Collection might not exist, ignore error
     }
 
     store = createActiveRequestStore({
       type: 'mongodb',
       instanceId,
-      db
+      db,
     })
     await store.initialize()
+  })
+
+  afterEach(async () => {
+    if (store) {
+      await store.shutdown()
+    }
   })
 
   it('should initialize successfully', async () => {
@@ -284,7 +303,7 @@ describe('MongoActiveRequestStore', () => {
     const results = await Promise.all(promises)
 
     // Exactly maxLimit should succeed
-    const successCount = results.filter(r => r === true).length
+    const successCount = results.filter((r) => r === true).length
     expect(successCount).toBeLessThanOrEqual(maxLimit)
 
     const count = await store.getCount('backend-1')
@@ -301,7 +320,7 @@ describe('RedisActiveRequestStore', () => {
     if (process.env.REDIS_URL) {
       try {
         redisClient = createClient({
-          url: process.env.REDIS_URL
+          url: process.env.REDIS_URL,
         })
         await redisClient.connect()
         console.log('Connected to Redis for ActiveRequestStore tests')
@@ -320,16 +339,14 @@ describe('RedisActiveRequestStore', () => {
   beforeEach(async () => {
     if (!redisClient) return
 
+    // Shutdown previous store if exists
+    if (store) {
+      await store.shutdown()
+    }
+
     // Clean up redis keys before each test
     try {
-      const keys = await redisClient.keys('active_requests:*')
-      if (keys.length > 0) {
-        await redisClient.del(keys)
-      }
-      const instanceKeys = await redisClient.keys('instance_requests:*')
-      if (instanceKeys.length > 0) {
-        await redisClient.del(instanceKeys)
-      }
+      await redisClient.flushDb()
     } catch (error) {
       console.warn('Failed to cleanup Redis:', error)
     }
@@ -337,9 +354,15 @@ describe('RedisActiveRequestStore', () => {
     store = createActiveRequestStore({
       type: 'redis',
       instanceId,
-      redis: redisClient
+      redis: redisClient,
     })
     await store.initialize()
+  })
+
+  afterEach(async () => {
+    if (store) {
+      await store.shutdown()
+    }
   })
 
   it('should initialize successfully', async () => {
@@ -558,7 +581,7 @@ describe('RedisActiveRequestStore', () => {
     const results = await Promise.all(promises)
 
     // Exactly maxLimit should succeed
-    const successCount = results.filter(r => r === true).length
+    const successCount = results.filter((r) => r === true).length
     expect(successCount).toBe(maxLimit)
 
     const count = await store.getCount('backend-1')
@@ -575,7 +598,7 @@ describe('RedisActiveRequestStore', () => {
     const expiredTimestamp = Date.now() - 700000 // 11+ minutes ago
     await redisClient.zAdd('active_requests:backend-1', {
       score: expiredTimestamp,
-      value: 'expired-req'
+      value: 'expired-req',
     })
 
     // Add a fresh request

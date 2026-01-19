@@ -1,10 +1,17 @@
-import type { Db } from 'mongodb'
-import type { BackendStats, StatsDataPoint } from '../../types/backend.js'
-import type { MetricsCollector } from './interface.js'
-import type { MetricsDataPoint, RequestCompleteData, TimeWindow, HistoryQueryParams } from './types.js'
-import { MetricsStorage } from './storage.js'
-import { PrometheusExporter } from './prometheus-exporter.js'
 import { randomUUID } from 'crypto'
+
+import { PrometheusExporter } from './prometheus-exporter.js'
+import { MetricsStorage } from './storage.js'
+
+import type { MetricsCollector } from './interface.js'
+import type {
+  HistoryQueryParams,
+  MetricsDataPoint,
+  RequestCompleteData,
+  TimeWindow,
+} from './types.js'
+import type { BackendStats, StatsDataPoint } from '../../types/backend.js'
+import type { Db } from 'mongodb'
 
 /**
  * Database-backed metrics collector
@@ -16,7 +23,10 @@ export class DbMetricsCollector implements MetricsCollector {
   private prometheusExporter: PrometheusExporter
   private instanceId: string
 
-  constructor(private db: Db, instanceId?: string) {
+  constructor(
+    private db: Db,
+    instanceId?: string
+  ) {
     this.storage = new MetricsStorage(db)
     this.prometheusExporter = new PrometheusExporter(this.storage)
     this.instanceId = instanceId || randomUUID()
@@ -49,7 +59,7 @@ export class DbMetricsCollector implements MetricsCollector {
       ttft: data.ttft,
       streamType: data.streamType,
       model: data.model,
-      errorType: data.errorType
+      errorType: data.errorType,
     }
 
     await this.storage.insertMetric(metric)

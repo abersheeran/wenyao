@@ -1,12 +1,11 @@
-import type { Db, Collection } from 'mongodb'
-import type { ActiveRequestStore, ActiveRequest } from './interface.js'
+import type { ActiveRequest, ActiveRequestStore } from './interface.js'
+import type { Collection, Db } from 'mongodb'
 
 /**
  * MongoDB document for a single active request
  */
 interface ActiveRequestDocument {
   requestId: string
-  backendId: string
   instanceId: string
   startTime: Date
   createdAt: Date
@@ -31,7 +30,10 @@ export class MongoActiveRequestStore implements ActiveRequestStore {
   private ttl: number = 600 // 10 minutes in seconds
   private cleanupInterval: NodeJS.Timeout | null = null
 
-  constructor(private db: Db, instanceId: string) {
+  constructor(
+    private db: Db,
+    instanceId: string
+  ) {
     this.collection = db.collection('active_requests')
     this.instanceId = instanceId
   }
@@ -48,10 +50,9 @@ export class MongoActiveRequestStore implements ActiveRequestStore {
       // This compensates for MongoDB not supporting TTL indexes on individual array items
       this.cleanupInterval = setInterval(() => {
         const tenMinutesAgo = new Date(Date.now() - this.ttl * 1000)
-        this.collection.updateMany(
-          {},
-          { $pull: { requests: { createdAt: { $lt: tenMinutesAgo } } } } as any
-        ).catch(err => console.error('Failed background mongo TTL cleanup:', err))
+        this.collection
+          .updateMany({}, { $pull: { requests: { createdAt: { $lt: tenMinutesAgo } } } } as any)
+          .catch((err) => console.error('Failed background mongo TTL cleanup:', err))
       }, 60000)
 
       // Allow the process to exit even if this interval is running
@@ -62,16 +63,28 @@ export class MongoActiveRequestStore implements ActiveRequestStore {
       console.log('✓ MongoActiveRequestStore initialized with indexes and background cleanup')
     } catch (error: any) {
       // Indexes might already exist
-      if (error.code === 85 || error.code === 86 || error.codeName === 'IndexOptionsConflict' || error.codeName === 'IndexKeySpecsConflict') {
+      if (
+        error.code === 85 ||
+        error.code === 86 ||
+        error.codeName === 'IndexOptionsConflict' ||
+        error.codeName === 'IndexKeySpecsConflict'
+      ) {
         console.log('✓ MongoActiveRequestStore initialized (indexes already exist)')
       } else {
-        console.warn('Warning: Failed to create some indexes for active_requests collection:', error.message)
+        console.warn(
+          'Warning: Failed to create some indexes for active_requests collection:',
+          error.message
+        )
         console.log('✓ MongoActiveRequestStore initialized (with index warnings)')
       }
     }
   }
 
-  async tryRecordStart(backendId: string, requestId: string, maxLimit: number | undefined): Promise<boolean> {
+  async tryRecordStart(
+    backendId: string,
+    requestId: string,
+    maxLimit: number | undefined
+  ): Promise<boolean> {
     // No limit configured (undefined or 0) - always allow
     if (maxLimit === undefined || maxLimit === 0) {
       await this.recordStart(backendId, requestId)
@@ -81,10 +94,9 @@ export class MongoActiveRequestStore implements ActiveRequestStore {
     const now = new Date()
     const doc: ActiveRequestDocument = {
       requestId,
-      backendId,
       instanceId: this.instanceId,
       startTime: now,
-      createdAt: now
+      createdAt: now,
     }
 
     try {
@@ -106,25 +118,25 @@ export class MongoActiveRequestStore implements ActiveRequestStore {
                       $filter: {
                         input: { $ifNull: ['$requests', []] },
                         as: 'r',
-                        cond: { $gt: ['$$r.createdAt', tenMinutesAgo] }
-                      }
-                    }
+                        cond: { $gt: ['$$r.createdAt', tenMinutesAgo] },
+                      },
+                    },
                   },
                   in: {
                     $cond: {
                       if: { $lt: [{ $size: '$$filtered' }, maxLimit] },
                       then: { $concatArrays: ['$$filtered', [doc]] },
-                      else: '$$filtered'
-                    }
-                  }
-                }
-              }
-            }
-          }
+                      else: '$$filtered',
+                    },
+                  },
+                },
+              },
+            },
+          },
         ],
         {
           upsert: true,
-          returnDocument: 'after'
+          returnDocument: 'after',
         }
       )
 
@@ -147,37 +159,34 @@ export class MongoActiveRequestStore implements ActiveRequestStore {
     const now = new Date()
     const doc: ActiveRequestDocument = {
       requestId,
-      backendId,
       instanceId: this.instanceId,
       startTime: now,
-      createdAt: now
+      createdAt: now,
     }
 
     try {
       await this.collection.updateOne(
         { _id: backendId as any },
         {
-          $push: { requests: doc } as any
+          $push: { requests: doc } as any,
         },
         { upsert: true }
       )
     } catch (error: any) {
-      if (error.code === 11000) {
-        console.warn(`Request ${requestId} already being tracked`)
-      } else {
-        console.error(`Failed to record active request start for ${backendId}:`, error.message)
-      }
+      console.error(`Failed to record active request start for ${backendId}:`, error.message)
     }
   }
 
   async recordComplete(backendId: string, requestId: string): Promise<void> {
     try {
-      await this.collection.updateOne(
-        { _id: backendId as any },
-        { $pull: { requests: { requestId } } } as any
-      )
+      await this.collection.updateOne({ _id: backendId as any }, {
+        $pull: { requests: { requestId } },
+      } as any)
     } catch (error: any) {
-      console.error(`Failed to delete active request ${requestId} for backend ${backendId}:`, error.message)
+      console.error(
+        `Failed to delete active request ${requestId} for backend ${backendId}:`,
+        error.message
+      )
     }
   }
 
@@ -189,14 +198,16 @@ export class MongoActiveRequestStore implements ActiveRequestStore {
   async getAllCounts(): Promise<Record<string, number>> {
     try {
       // Use aggregation to compute array sizes on the database side
-      const results = await this.collection.aggregate([
-        {
-          $project: {
-            _id: 1,
-            count: { $size: { $ifNull: ['$requests', []] } }
-          }
-        }
-      ]).toArray()
+      const results = await this.collection
+        .aggregate([
+          {
+            $project: {
+              _id: 1,
+              count: { $size: { $ifNull: ['$requests', []] } },
+            },
+          },
+        ])
+        .toArray()
 
       const counts: Record<string, number> = {}
       for (const res of results) {
@@ -212,10 +223,9 @@ export class MongoActiveRequestStore implements ActiveRequestStore {
 
   async cleanup(instanceId: string): Promise<number> {
     // Remove all requests from this instance across all backends
-    const result = await this.collection.updateMany(
-      {},
-      { $pull: { requests: { instanceId } } } as any
-    )
+    const result = await this.collection.updateMany({}, {
+      $pull: { requests: { instanceId } },
+    } as any)
     return result.modifiedCount
   }
 

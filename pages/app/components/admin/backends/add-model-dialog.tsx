@@ -9,12 +9,13 @@ import {
   DialogTitle,
 } from "../../ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import { useAdminApi, type LoadBalancingStrategy, type MinErrorRateOptions } from "~/apis";
+import { useAdminApi, type LoadBalancingStrategy, type MinErrorRateOptions, type ProviderType } from "~/apis";
 
 export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (v: boolean) => void; onAdded: () => void; }) {
   const api = useAdminApi();
-  const [form, setForm] = React.useState<{ model: string; loadBalancingStrategy: LoadBalancingStrategy; enableAffinity?: boolean; minErrorRateOptions?: MinErrorRateOptions }>({
+  const [form, setForm] = React.useState<{ model: string; provider: ProviderType; loadBalancingStrategy: LoadBalancingStrategy; enableAffinity?: boolean; minErrorRateOptions?: MinErrorRateOptions }>({
     model: "",
+    provider: "openai",
     loadBalancingStrategy: "weighted",
     enableAffinity: false
   });
@@ -31,7 +32,7 @@ export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean;
       ...form,
       minErrorRateOptions: form.loadBalancingStrategy === 'min-error-rate' ? minErrorRateOpts : undefined
     });
-    setForm({ model: "", loadBalancingStrategy: "weighted", enableAffinity: false });
+    setForm({ model: "", provider: "openai", loadBalancingStrategy: "weighted", enableAffinity: false });
     setMinErrorRateOpts({ minRequests: 20, circuitBreakerThreshold: 0.9, epsilon: 0.001, timeWindowMinutes: 15 });
     onOpenChange(false);
     onAdded();
@@ -53,6 +54,24 @@ export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean;
               onChange={(e) => setForm({ ...form, model: e.target.value })}
               placeholder="e.g., gpt-4, claude-3-sonnet"
             />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Provider Type</label>
+            <Select
+              value={form.provider}
+              onValueChange={(v) => setForm({ ...form, provider: v as ProviderType })}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="openai">OpenAI</SelectItem>
+                <SelectItem value="bedrock">AWS Bedrock</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-gray-500 mt-1">
+              选择此模型使用的 API 提供商类型。所有 backend 必须使用相同的 provider。
+            </p>
           </div>
           <div>
             <label className="block text-sm mb-1">Load Balancing Strategy</label>

@@ -1,6 +1,6 @@
-import type { Collection, Db } from 'mongodb'
+import type { HistoryQueryParams, MetricsDataPoint, TimeWindow } from './types.js'
 import type { BackendStats, StatsDataPoint } from '../../types/backend.js'
-import type { MetricsDataPoint, TimeWindow, HistoryQueryParams } from './types.js'
+import type { Collection, Db } from 'mongodb'
 
 /**
  * Storage layer for metrics data in MongoDB
@@ -34,8 +34,8 @@ export class MetricsStorage {
         timeseries: {
           timeField: 'timestamp',
           metaField: 'backendId',
-          granularity: 'seconds'
-        }
+          granularity: 'seconds',
+        },
       })
       console.log('✓ Created Time Series Collection: request_metrics')
     }
@@ -85,74 +85,62 @@ export class MetricsStorage {
                 $dateTrunc: {
                   date: '$timestamp',
                   unit: 'minute',
-                  binSize: 1
-                }
-              }
+                  binSize: 1,
+                },
+              },
             },
             totalRequests: { $sum: 1 },
             successfulRequests: {
-              $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] }
+              $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] },
             },
             failedRequests: {
-              $sum: { $cond: [{ $eq: ['$status', 'failure'] }, 1, 0] }
+              $sum: { $cond: [{ $eq: ['$status', 'failure'] }, 1, 0] },
             },
             streamingTTFTSum: {
               $sum: {
                 $cond: [
                   {
-                    $and: [
-                      { $eq: ['$streamType', 'streaming'] },
-                      { $ne: ['$ttft', null] }
-                    ]
+                    $and: [{ $eq: ['$streamType', 'streaming'] }, { $ne: ['$ttft', null] }],
                   },
                   '$ttft',
-                  0
-                ]
-              }
+                  0,
+                ],
+              },
             },
             streamingTTFTCount: {
               $sum: {
                 $cond: [
                   {
-                    $and: [
-                      { $eq: ['$streamType', 'streaming'] },
-                      { $ne: ['$ttft', null] }
-                    ]
+                    $and: [{ $eq: ['$streamType', 'streaming'] }, { $ne: ['$ttft', null] }],
                   },
                   1,
-                  0
-                ]
-              }
+                  0,
+                ],
+              },
             },
             nonStreamingTTFTSum: {
               $sum: {
                 $cond: [
                   {
-                    $and: [
-                      { $eq: ['$streamType', 'non-streaming'] },
-                      { $ne: ['$ttft', null] }
-                    ]
+                    $and: [{ $eq: ['$streamType', 'non-streaming'] }, { $ne: ['$ttft', null] }],
                   },
                   '$ttft',
-                  0
-                ]
-              }
+                  0,
+                ],
+              },
             },
             nonStreamingTTFTCount: {
               $sum: {
                 $cond: [
                   {
-                    $and: [
-                      { $eq: ['$streamType', 'non-streaming'] },
-                      { $ne: ['$ttft', null] }
-                    ]
+                    $and: [{ $eq: ['$streamType', 'non-streaming'] }, { $ne: ['$ttft', null] }],
                   },
                   1,
-                  0
-                ]
-              }
-            }
-          }
+                  0,
+                ],
+              },
+            },
+          },
         },
         {
           $project: {
@@ -166,26 +154,26 @@ export class MetricsStorage {
               $cond: [
                 { $gt: ['$totalRequests', 0] },
                 { $divide: ['$successfulRequests', '$totalRequests'] },
-                0
-              ]
+                0,
+              ],
             },
             avgStreamingTTFT: {
               $cond: [
                 { $gt: ['$streamingTTFTCount', 0] },
                 { $divide: ['$streamingTTFTSum', '$streamingTTFTCount'] },
-                0
-              ]
+                0,
+              ],
             },
             avgNonStreamingTTFT: {
               $cond: [
                 { $gt: ['$nonStreamingTTFTCount', 0] },
                 { $divide: ['$nonStreamingTTFTSum', '$nonStreamingTTFTCount'] },
-                0
-              ]
-            }
-          }
-        }
-      ]
+                0,
+              ],
+            },
+          },
+        },
+      ],
     })
 
     // Create indexes on the view
@@ -193,10 +181,7 @@ export class MetricsStorage {
       { backendId: 1, timestamp: -1 },
       { name: 'backendId_timestamp' }
     )
-    await this.viewCollection.createIndex(
-      { timestamp: -1 },
-      { name: 'timestamp' }
-    )
+    await this.viewCollection.createIndex({ timestamp: -1 }, { name: 'timestamp' })
 
     console.log('✓ Created pre-aggregated view: backend_stats_1min (90%+ faster queries)')
   }
@@ -216,6 +201,7 @@ export class MetricsStorage {
   /**
    * Get aggregated stats for a specific backend within a time window
    * Uses pre-aggregated 1-minute view for high performance (90%+ faster)
+   * Falls back to raw collection if view has no data (e.g., in tests)
    */
   async getStats(backendId: string, timeWindow: TimeWindow): Promise<BackendStats> {
     const pipeline = [
@@ -224,9 +210,9 @@ export class MetricsStorage {
           backendId,
           timestamp: {
             $gte: timeWindow.startTime,
-            $lte: timeWindow.endTime
-          }
-        }
+            $lte: timeWindow.endTime,
+          },
+        },
       },
       {
         $group: {
@@ -237,22 +223,23 @@ export class MetricsStorage {
           // Weighted average for TTFT
           streamingTTFTSum: {
             $sum: {
-              $multiply: ['$avgStreamingTTFT', '$totalRequests']
-            }
+              $multiply: ['$avgStreamingTTFT', '$totalRequests'],
+            },
           },
           nonStreamingTTFTSum: {
             $sum: {
-              $multiply: ['$avgNonStreamingTTFT', '$totalRequests']
-            }
-          }
-        }
-      }
+              $multiply: ['$avgNonStreamingTTFT', '$totalRequests'],
+            },
+          },
+        },
+      },
     ]
 
     const results = await this.viewCollection.aggregate(pipeline).toArray()
 
     if (results.length === 0) {
-      return this.getEmptyStats(backendId)
+      // Fallback to raw collection for real-time data (useful in tests)
+      return this.getStatsFromRawCollection(backendId, timeWindow)
     }
 
     const result = results[0] as any
@@ -262,16 +249,112 @@ export class MetricsStorage {
       totalRequests: result.totalRequests,
       successfulRequests: result.successfulRequests,
       failedRequests: result.failedRequests,
-      successRate: result.totalRequests > 0
-        ? result.successfulRequests / result.totalRequests
-        : 0,
-      averageStreamingTTFT: result.totalRequests > 0
-        ? result.streamingTTFTSum / result.totalRequests
-        : 0,
-      averageNonStreamingTTFT: result.totalRequests > 0
-        ? result.nonStreamingTTFTSum / result.totalRequests
-        : 0,
-      ttftSamples: [] // Views don't store individual samples
+      successRate: result.totalRequests > 0 ? result.successfulRequests / result.totalRequests : 0,
+      averageStreamingTTFT:
+        result.totalRequests > 0 ? result.streamingTTFTSum / result.totalRequests : 0,
+      averageNonStreamingTTFT:
+        result.totalRequests > 0 ? result.nonStreamingTTFTSum / result.totalRequests : 0,
+      ttftSamples: [], // Views don't store individual samples
+    }
+  }
+
+  /**
+   * Fallback method to query raw collection for real-time stats
+   * Used when view hasn't aggregated data yet
+   */
+  private async getStatsFromRawCollection(
+    backendId: string,
+    timeWindow: TimeWindow
+  ): Promise<BackendStats> {
+    const pipeline = [
+      {
+        $match: {
+          backendId,
+          timestamp: {
+            $gte: timeWindow.startTime,
+            $lte: timeWindow.endTime,
+          },
+        },
+      },
+      {
+        $group: {
+          _id: '$backendId',
+          totalRequests: { $sum: 1 },
+          successfulRequests: {
+            $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] },
+          },
+          failedRequests: {
+            $sum: { $cond: [{ $eq: ['$status', 'failure'] }, 1, 0] },
+          },
+          streamingTTFTs: {
+            $push: {
+              $cond: [
+                {
+                  $and: [{ $eq: ['$streamType', 'streaming'] }, { $ne: ['$ttft', null] }],
+                },
+                '$ttft',
+                '$$REMOVE',
+              ],
+            },
+          },
+          nonStreamingTTFTs: {
+            $push: {
+              $cond: [
+                {
+                  $and: [{ $eq: ['$streamType', 'non-streaming'] }, { $ne: ['$ttft', null] }],
+                },
+                '$ttft',
+                '$$REMOVE',
+              ],
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          backendId: '$_id',
+          totalRequests: 1,
+          successfulRequests: 1,
+          failedRequests: 1,
+          successRate: {
+            $cond: [
+              { $gt: ['$totalRequests', 0] },
+              { $divide: ['$successfulRequests', '$totalRequests'] },
+              0,
+            ],
+          },
+          averageStreamingTTFT: {
+            $cond: [{ $gt: [{ $size: '$streamingTTFTs' }, 0] }, { $avg: '$streamingTTFTs' }, 0],
+          },
+          averageNonStreamingTTFT: {
+            $cond: [
+              { $gt: [{ $size: '$nonStreamingTTFTs' }, 0] },
+              { $avg: '$nonStreamingTTFTs' },
+              0,
+            ],
+          },
+        },
+      },
+    ]
+
+    const results = await this.collection.aggregate(pipeline).toArray()
+
+    if (results.length === 0) {
+      return this.getEmptyStats(backendId)
+    }
+
+    const result = results[0] as any
+
+    return {
+      backendId: result.backendId,
+      totalRequests: result.totalRequests,
+      successfulRequests: result.successfulRequests,
+      failedRequests: result.failedRequests,
+      successRate: result.successRate,
+      averageStreamingTTFT: result.averageStreamingTTFT,
+      averageNonStreamingTTFT: result.averageNonStreamingTTFT,
+      ttftSamples: [],
     }
   }
 
@@ -285,9 +368,9 @@ export class MetricsStorage {
         $match: {
           timestamp: {
             $gte: timeWindow.startTime,
-            $lte: timeWindow.endTime
-          }
-        }
+            $lte: timeWindow.endTime,
+          },
+        },
       },
       {
         $group: {
@@ -297,16 +380,16 @@ export class MetricsStorage {
           failedRequests: { $sum: '$failedRequests' },
           streamingTTFTSum: {
             $sum: {
-              $multiply: ['$avgStreamingTTFT', '$totalRequests']
-            }
+              $multiply: ['$avgStreamingTTFT', '$totalRequests'],
+            },
           },
           nonStreamingTTFTSum: {
             $sum: {
-              $multiply: ['$avgNonStreamingTTFT', '$totalRequests']
-            }
-          }
-        }
-      }
+              $multiply: ['$avgNonStreamingTTFT', '$totalRequests'],
+            },
+          },
+        },
+      },
     ]
 
     const results = await this.viewCollection.aggregate(pipeline).toArray()
@@ -320,16 +403,13 @@ export class MetricsStorage {
         totalRequests: result.totalRequests,
         successfulRequests: result.successfulRequests,
         failedRequests: result.failedRequests,
-        successRate: result.totalRequests > 0
-          ? result.successfulRequests / result.totalRequests
-          : 0,
-        averageStreamingTTFT: result.totalRequests > 0
-          ? result.streamingTTFTSum / result.totalRequests
-          : 0,
-        averageNonStreamingTTFT: result.totalRequests > 0
-          ? result.nonStreamingTTFTSum / result.totalRequests
-          : 0,
-        ttftSamples: []
+        successRate:
+          result.totalRequests > 0 ? result.successfulRequests / result.totalRequests : 0,
+        averageStreamingTTFT:
+          result.totalRequests > 0 ? result.streamingTTFTSum / result.totalRequests : 0,
+        averageNonStreamingTTFT:
+          result.totalRequests > 0 ? result.nonStreamingTTFTSum / result.totalRequests : 0,
+        ttftSamples: [],
       })
     }
 
@@ -361,8 +441,8 @@ export class MetricsStorage {
     const match: any = {
       timestamp: {
         $gte: params.startTime,
-        $lte: params.endTime
-      }
+        $lte: params.endTime,
+      },
     }
 
     if (params.backendId) {
@@ -384,10 +464,10 @@ export class MetricsStorage {
           successRate: 1,
           averageStreamingTTFT: '$avgStreamingTTFT',
           averageNonStreamingTTFT: '$avgNonStreamingTTFT',
-          requestsInPeriod: '$totalRequests'
-        }
+          requestsInPeriod: '$totalRequests',
+        },
       },
-      { $sort: { timestamp: -1 } }
+      { $sort: { timestamp: -1 } },
     ]
 
     if (params.limit) {
@@ -402,12 +482,14 @@ export class MetricsStorage {
    * Fallback method to query raw collection when instanceId filter is needed
    * Private method used internally by getHistoricalStats
    */
-  private async getHistoricalStatsFromRawCollection(params: HistoryQueryParams): Promise<StatsDataPoint[]> {
+  private async getHistoricalStatsFromRawCollection(
+    params: HistoryQueryParams
+  ): Promise<StatsDataPoint[]> {
     const match: any = {
       timestamp: {
         $gte: params.startTime,
-        $lte: params.endTime
-      }
+        $lte: params.endTime,
+      },
     }
 
     if (params.backendId) {
@@ -430,46 +512,40 @@ export class MetricsStorage {
               $dateTrunc: {
                 date: '$timestamp',
                 unit: 'minute',
-                binSize: 1
-              }
-            }
+                binSize: 1,
+              },
+            },
           },
           totalRequests: { $sum: 1 },
           successfulRequests: {
-            $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] },
           },
           failedRequests: {
-            $sum: { $cond: [{ $eq: ['$status', 'failure'] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ['$status', 'failure'] }, 1, 0] },
           },
           streamingTTFTs: {
             $push: {
               $cond: [
                 {
-                  $and: [
-                    { $eq: ['$streamType', 'streaming'] },
-                    { $ne: ['$ttft', null] }
-                  ]
+                  $and: [{ $eq: ['$streamType', 'streaming'] }, { $ne: ['$ttft', null] }],
                 },
                 '$ttft',
-                '$$REMOVE'
-              ]
-            }
+                '$$REMOVE',
+              ],
+            },
           },
           nonStreamingTTFTs: {
             $push: {
               $cond: [
                 {
-                  $and: [
-                    { $eq: ['$streamType', 'non-streaming'] },
-                    { $ne: ['$ttft', null] }
-                  ]
+                  $and: [{ $eq: ['$streamType', 'non-streaming'] }, { $ne: ['$ttft', null] }],
                 },
                 '$ttft',
-                '$$REMOVE'
-              ]
-            }
-          }
-        }
+                '$$REMOVE',
+              ],
+            },
+          },
+        },
       },
       {
         $project: {
@@ -484,27 +560,23 @@ export class MetricsStorage {
             $cond: [
               { $gt: ['$totalRequests', 0] },
               { $divide: ['$successfulRequests', '$totalRequests'] },
-              0
-            ]
+              0,
+            ],
           },
           averageStreamingTTFT: {
-            $cond: [
-              { $gt: [{ $size: '$streamingTTFTs' }, 0] },
-              { $avg: '$streamingTTFTs' },
-              0
-            ]
+            $cond: [{ $gt: [{ $size: '$streamingTTFTs' }, 0] }, { $avg: '$streamingTTFTs' }, 0],
           },
           averageNonStreamingTTFT: {
             $cond: [
               { $gt: [{ $size: '$nonStreamingTTFTs' }, 0] },
               { $avg: '$nonStreamingTTFTs' },
-              0
-            ]
+              0,
+            ],
           },
-          requestsInPeriod: '$totalRequests'
-        }
+          requestsInPeriod: '$totalRequests',
+        },
       },
-      { $sort: { timestamp: -1 } }
+      { $sort: { timestamp: -1 } },
     ]
 
     if (params.limit) {
@@ -524,7 +596,7 @@ export class MetricsStorage {
       successRate: 0,
       averageStreamingTTFT: 0,
       averageNonStreamingTTFT: 0,
-      ttftSamples: []
+      ttftSamples: [],
     }
   }
 }

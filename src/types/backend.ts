@@ -1,11 +1,26 @@
 // Load balancing strategy types
 export type LoadBalancingStrategy = 'weighted' | 'lowest-ttft' | 'min-error-rate'
 
+// Provider types
+export type ProviderType = 'openai' | 'bedrock'
+
+// AWS Bedrock specific configuration
+export interface BedrockConfig {
+  region: string
+  accessKeyId: string
+  secretAccessKey: string
+}
+
+// OpenAI specific configuration
+export interface OpenAIConfig {
+  url: string
+  apiKey: string
+}
+
 // Individual backend configuration (within a model config)
 export interface BackendConfig {
   id: string
-  url: string
-  apiKey: string
+  provider: ProviderType
   weight: number
   enabled: boolean
   model?: string // Optional: Override the model name when forwarding to this backend
@@ -13,6 +28,10 @@ export interface BackendConfig {
   nonStreamingTTFTTimeout?: number // Optional: TTFT timeout in milliseconds for non-streaming requests
   recordRequests?: boolean // Optional: Record all requests (URL, headers, body) to MongoDB
   maxConcurrentRequests?: number // Optional: Maximum concurrent requests (undefined/0 = no limit, >0 = specific limit)
+
+  // Provider-specific configurations (one of these must be present based on provider type)
+  openaiConfig?: OpenAIConfig
+  bedrockConfig?: BedrockConfig
 }
 
 // Load balancing strategy options for min-error-rate
@@ -40,6 +59,7 @@ export interface AffinityMapping {
 // Model configuration - primary structure with model as unique key
 export interface ModelConfig {
   model: string // Primary key - the model name (e.g., "gpt-4", "claude-3-sonnet")
+  provider: ProviderType // Provider type for this model - all backends must use this provider
   backends: BackendConfig[] // Array of backend configurations for this model
   loadBalancingStrategy: LoadBalancingStrategy // Strategy for selecting backends
   minErrorRateOptions?: MinErrorRateOptions // Options for min-error-rate strategy
@@ -78,43 +98,6 @@ export interface HistoricalStats {
   dataPoints: StatsDataPoint[]
   startTime: Date
   endTime: Date
-}
-
-// OpenAI Chat Completion Request
-export interface ChatCompletionRequest {
-  model: string
-  messages: Array<{
-    role: 'system' | 'user' | 'assistant'
-    content: string
-  }>
-  stream?: boolean
-  temperature?: number
-  max_tokens?: number
-  top_p?: number
-  frequency_penalty?: number
-  presence_penalty?: number
-  [key: string]: any
-}
-
-// OpenAI Chat Completion Response (non-streaming)
-export interface ChatCompletionResponse {
-  id: string
-  object: string
-  created: number
-  model: string
-  choices: Array<{
-    index: number
-    message: {
-      role: string
-      content: string
-    }
-    finish_reason: string | null
-  }>
-  usage?: {
-    prompt_tokens: number
-    completion_tokens: number
-    total_tokens: number
-  }
 }
 
 // Recorded request data

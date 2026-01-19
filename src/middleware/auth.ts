@@ -1,6 +1,7 @@
-import type { Context, Next } from 'hono'
 import { mongoDBService } from '../services/mongodb.js'
+
 import type { Variables } from '../types/context.js'
+import type { Context, Next } from 'hono'
 
 /**
  * Admin API 鉴权中间件
@@ -21,8 +22,8 @@ export async function adminAuth(c: Context, next: Next) {
   // 解析逗号分隔的密钥列表
   const validApiKeys = apiKeysEnv
     .split(',')
-    .map(key => key.trim())
-    .filter(key => key.length > 0)
+    .map((key) => key.trim())
+    .filter((key) => key.length > 0)
 
   if (validApiKeys.length === 0) {
     console.warn('[Auth] ADMIN_APIKEYS is empty, admin endpoints are unprotected!')
@@ -34,29 +35,38 @@ export async function adminAuth(c: Context, next: Next) {
   const authHeader = c.req.header('Authorization')
 
   if (!authHeader) {
-    return c.json({
-      error: 'Unauthorized',
-      message: 'Missing Authorization header'
-    }, 401)
+    return c.json(
+      {
+        error: 'Unauthorized',
+        message: 'Missing Authorization header',
+      },
+      401
+    )
   }
 
   // 验证 Bearer Token 格式
   const parts = authHeader.split(' ')
   if (parts.length !== 2 || parts[0] !== 'Bearer') {
-    return c.json({
-      error: 'Unauthorized',
-      message: 'Invalid Authorization header format. Expected: Bearer <token>'
-    }, 401)
+    return c.json(
+      {
+        error: 'Unauthorized',
+        message: 'Invalid Authorization header format. Expected: Bearer <token>',
+      },
+      401
+    )
   }
 
   const token = parts[1]
 
   // 验证 token 是否在允许的密钥列表中
   if (!validApiKeys.includes(token)) {
-    return c.json({
-      error: 'Unauthorized',
-      message: 'Invalid API key'
-    }, 401)
+    return c.json(
+      {
+        error: 'Unauthorized',
+        message: 'Invalid API key',
+      },
+      401
+    )
   }
 
   // 验证通过,继续处理请求
@@ -72,29 +82,38 @@ export async function proxyAuth(c: Context<{ Variables: Variables }>, next: Next
   // 检查 MongoDB 连接
   if (!mongoDBService.isConnected()) {
     console.error('[ProxyAuth] MongoDB is not connected')
-    return c.json({
-      error: 'Service Unavailable',
-      message: 'Database connection not available'
-    }, 503)
+    return c.json(
+      {
+        error: 'Service Unavailable',
+        message: 'Database connection not available',
+      },
+      503
+    )
   }
 
   // 从请求头获取 Authorization
-  const authHeader = c.req.header('Authorization')
+  const authHeader = c.req.header('X-Authorization') ?? c.req.header('Authorization')
 
   if (!authHeader) {
-    return c.json({
-      error: 'Unauthorized',
-      message: 'Missing Authorization header'
-    }, 401)
+    return c.json(
+      {
+        error: 'Unauthorized',
+        message: 'Missing Authorization header',
+      },
+      401
+    )
   }
 
   // 验证 Bearer Token 格式
   const parts = authHeader.split(' ')
   if (parts.length !== 2 || parts[0] !== 'Bearer') {
-    return c.json({
-      error: 'Unauthorized',
-      message: 'Invalid Authorization header format. Expected: Bearer <token>'
-    }, 401)
+    return c.json(
+      {
+        error: 'Unauthorized',
+        message: 'Invalid Authorization header format. Expected: Bearer <token>',
+      },
+      401
+    )
   }
 
   const token = parts[1]
@@ -106,13 +125,16 @@ export async function proxyAuth(c: Context<{ Variables: Variables }>, next: Next
       { key: token },
       { $set: { lastUsedAt: new Date() } },
       { returnDocument: 'after' }
-    );
+    )
 
     if (!apiKey) {
-      return c.json({
-        error: 'Unauthorized',
-        message: 'Invalid API key'
-      }, 401)
+      return c.json(
+        {
+          error: 'Unauthorized',
+          message: 'Invalid API key',
+        },
+        401
+      )
     }
 
     // 将 API Key 信息存储在 context 中,供后续使用
@@ -122,9 +144,12 @@ export async function proxyAuth(c: Context<{ Variables: Variables }>, next: Next
     await next()
   } catch (error) {
     console.error('[ProxyAuth] Error validating API key:', error)
-    return c.json({
-      error: 'Internal Server Error',
-      message: 'Failed to validate API key'
-    }, 500)
+    return c.json(
+      {
+        error: 'Internal Server Error',
+        message: 'Failed to validate API key',
+      },
+      500
+    )
   }
 }

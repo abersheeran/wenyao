@@ -1,6 +1,12 @@
-import { MongoClient, Db, ChangeStream, Collection } from 'mongodb'
-import type { ModelConfig, StatsDataPoint, RecordedRequest, AffinityMapping } from '../types/backend.js'
+import { ChangeStream, Collection, Db, MongoClient } from 'mongodb'
+
 import type { ApiKey } from '../types/apikey.js'
+import type {
+  AffinityMapping,
+  ModelConfig,
+  RecordedRequest,
+  StatsDataPoint,
+} from '../types/backend.js'
 
 /**
  * MongoDB Service
@@ -14,7 +20,9 @@ export class MongoDBService {
   private db: Db | null = null
   private changeStream: ChangeStream | null = null
 
-  constructor(private url: string = process.env.MONGODB_URL || 'mongodb://localhost:27017/wenyao') {}
+  constructor(
+    private url: string = process.env.MONGODB_URL || 'mongodb://localhost:27017/wenyao'
+  ) {}
 
   /**
    * Establishes connection to MongoDB and initializes collections/indexes.
@@ -133,10 +141,7 @@ export class MongoDBService {
     await collection.createIndex({ backendId: 1 })
 
     // TTL index to auto-delete stale mappings (1 hour of inactivity)
-    await collection.createIndex(
-      { lastAccessedAt: 1 },
-      { expireAfterSeconds: 3600 }
-    )
+    await collection.createIndex({ lastAccessedAt: 1 }, { expireAfterSeconds: 3600 })
 
     console.log('Affinity mappings collection initialized with indexes')
   }
@@ -148,14 +153,17 @@ export class MongoDBService {
    * @param onChange - Callback triggered when a change occurs
    */
   async watchModels(
-    onChange: (modelConfig: ModelConfig, operationType: 'insert' | 'update' | 'delete' | 'replace') => void
+    onChange: (
+      modelConfig: ModelConfig,
+      operationType: 'insert' | 'update' | 'delete' | 'replace'
+    ) => void
   ): Promise<void> {
     if (!this.isConnected()) return
 
     const collection = this.getModelsCollection()
 
     this.changeStream = collection.watch([], {
-      fullDocument: 'updateLookup'
+      fullDocument: 'updateLookup',
     })
 
     console.log('Watching MongoDB for model configuration changes...')
@@ -174,7 +182,10 @@ export class MongoDBService {
             if ('documentKey' in change && change.documentKey) {
               // For delete, we might only have the ID or indexed fields depending on config
               // Here we pass a partial object as the actual config is gone
-              onChange({ model: (change.documentKey as any).model?.toString() || 'unknown' } as any, 'delete')
+              onChange(
+                { model: (change.documentKey as any).model?.toString() || 'unknown' } as any,
+                'delete'
+              )
             }
             break
         }

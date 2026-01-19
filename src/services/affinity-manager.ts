@@ -1,4 +1,5 @@
 import { mongoDBService } from './mongodb.js'
+
 import type { ConfigManager } from './config-manager.js'
 import type { AffinityMapping, BackendConfig } from '../types/backend.js'
 
@@ -58,13 +59,15 @@ export class AffinityManager {
           this.updateCache(cacheKey, backendId)
 
           // Update lastAccessedAt asynchronously (don't block)
-          collection.updateOne(
-            { model, sessionId },
-            {
-              $set: { lastAccessedAt: new Date() },
-              $inc: { accessCount: 1 }
-            }
-          ).catch(err => console.error('Failed to update affinity access time:', err))
+          collection
+            .updateOne(
+              { model, sessionId },
+              {
+                $set: { lastAccessedAt: new Date() },
+                $inc: { accessCount: 1 },
+              }
+            )
+            .catch((err) => console.error('Failed to update affinity access time:', err))
         }
       } catch (error) {
         console.error(`Error fetching affinity mapping for ${model}:${sessionId}:`, error)
@@ -78,7 +81,7 @@ export class AffinityManager {
     const backend = configManager.getBackend(model, backendId)
     if (!backend || !backend.enabled || backend.weight === 0) {
       // Backend no longer valid, clean up mapping
-      this.clearMappings({ model, sessionId }).catch(err =>
+      this.clearMappings({ model, sessionId }).catch((err) =>
         console.error('Failed to cleanup invalid affinity:', err)
       )
       return null
@@ -95,11 +98,7 @@ export class AffinityManager {
    * @param sessionId - The session identifier
    * @param backendId - The ID of the backend to attach to the session
    */
-  async setAffinityBackend(
-    model: string,
-    sessionId: string,
-    backendId: string
-  ): Promise<void> {
+  async setAffinityBackend(model: string, sessionId: string, backendId: string): Promise<void> {
     if (!mongoDBService.isConnected()) {
       console.warn('MongoDB not connected, affinity will not persist')
       return
@@ -115,12 +114,12 @@ export class AffinityManager {
         {
           $set: {
             backendId,
-            lastAccessedAt: now
+            lastAccessedAt: now,
           },
           $setOnInsert: {
             createdAt: now,
-            accessCount: 0
-          }
+            accessCount: 0,
+          },
         },
         { upsert: true }
       )
@@ -203,10 +202,10 @@ export class AffinityManager {
    * Admin API: Get all affinity mappings (paginated)
    */
   async getAllMappings(
-    filter?: { model?: string, backendId?: string },
+    filter?: { model?: string; backendId?: string },
     limit: number = 100,
     offset: number = 0
-  ): Promise<{ mappings: AffinityMapping[], total: number }> {
+  ): Promise<{ mappings: AffinityMapping[]; total: number }> {
     if (!mongoDBService.isConnected()) {
       return { mappings: [], total: 0 }
     }
@@ -216,13 +215,8 @@ export class AffinityManager {
       const query = filter || {}
 
       const [mappings, total] = await Promise.all([
-        collection
-          .find(query)
-          .sort({ lastAccessedAt: -1 })
-          .skip(offset)
-          .limit(limit)
-          .toArray(),
-        collection.countDocuments(query)
+        collection.find(query).sort({ lastAccessedAt: -1 }).skip(offset).limit(limit).toArray(),
+        collection.countDocuments(query),
       ])
 
       return { mappings, total }
@@ -236,8 +230,8 @@ export class AffinityManager {
    * Admin API: Clear affinity mappings
    */
   async clearMappings(filter?: {
-    model?: string,
-    sessionId?: string,
+    model?: string
+    sessionId?: string
     backendId?: string
   }): Promise<number> {
     if (!mongoDBService.isConnected()) return 0

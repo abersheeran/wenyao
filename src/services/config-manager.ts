@@ -1,6 +1,7 @@
-import type { ModelConfig, BackendConfig } from '../types/backend.js'
-import { mongoDBService } from './mongodb.js'
 import { affinityManager } from './affinity-manager.js'
+import { mongoDBService } from './mongodb.js'
+
+import type { BackendConfig, ModelConfig } from '../types/backend.js'
 
 /**
  * Config Manager
@@ -90,7 +91,7 @@ export class ConfigManager {
     if (!modelConfig) {
       return []
     }
-    return modelConfig.backends.filter(backend => backend.enabled)
+    return modelConfig.backends.filter((backend) => backend.enabled)
   }
 
   /**
@@ -107,7 +108,7 @@ export class ConfigManager {
    * @param model - The name of the model
    */
   getBackendsForSelection(model: string): BackendConfig[] {
-    return this.getEnabledBackends(model).filter(backend => backend.weight > 0)
+    return this.getEnabledBackends(model).filter((backend) => backend.weight > 0)
   }
 
   /**
@@ -120,7 +121,7 @@ export class ConfigManager {
     if (!modelConfig) {
       return undefined
     }
-    return modelConfig.backends.find(backend => backend.id === backendId)
+    return modelConfig.backends.find((backend) => backend.id === backendId)
   }
 
   /**
@@ -146,7 +147,10 @@ export class ConfigManager {
   }
 
   // Update an existing model configuration
-  async updateModelConfig(model: string, updates: Partial<Omit<ModelConfig, 'model'>>): Promise<ModelConfig> {
+  async updateModelConfig(
+    model: string,
+    updates: Partial<Omit<ModelConfig, 'model'>>
+  ): Promise<ModelConfig> {
     const modelConfig = this.modelConfigs.get(model)
     if (!modelConfig) {
       throw new Error(`Model configuration for ${model} not found`)
@@ -202,8 +206,15 @@ export class ConfigManager {
       throw new Error(`Model configuration for ${model} not found`)
     }
 
+    // Check if backend provider matches model provider
+    if (backend.provider !== modelConfig.provider) {
+      throw new Error(
+        `Backend provider '${backend.provider}' does not match model provider '${modelConfig.provider}'`
+      )
+    }
+
     // Check if backend ID already exists
-    if (modelConfig.backends.some(b => b.id === backend.id)) {
+    if (modelConfig.backends.some((b) => b.id === backend.id)) {
       throw new Error(`Backend with id ${backend.id} already exists in model ${model}`)
     }
 
@@ -224,13 +235,17 @@ export class ConfigManager {
   }
 
   // Update a specific backend within a model configuration
-  async updateBackendInModel(model: string, backendId: string, updates: Partial<Omit<BackendConfig, 'id'>>): Promise<ModelConfig> {
+  async updateBackendInModel(
+    model: string,
+    backendId: string,
+    updates: Partial<Omit<BackendConfig, 'id'>>
+  ): Promise<ModelConfig> {
     const modelConfig = this.modelConfigs.get(model)
     if (!modelConfig) {
       throw new Error(`Model configuration for ${model} not found`)
     }
 
-    const backendIndex = modelConfig.backends.findIndex(b => b.id === backendId)
+    const backendIndex = modelConfig.backends.findIndex((b) => b.id === backendId)
     if (backendIndex === -1) {
       throw new Error(`Backend with id ${backendId} not found in model ${model}`)
     }
@@ -259,7 +274,7 @@ export class ConfigManager {
       throw new Error(`Model configuration for ${model} not found`)
     }
 
-    const updatedBackends = modelConfig.backends.filter(b => b.id !== backendId)
+    const updatedBackends = modelConfig.backends.filter((b) => b.id !== backendId)
 
     if (updatedBackends.length === modelConfig.backends.length) {
       throw new Error(`Backend with id ${backendId} not found in model ${model}`)

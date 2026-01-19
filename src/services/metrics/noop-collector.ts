@@ -1,6 +1,6 @@
-import type { BackendStats, StatsDataPoint } from '../../types/backend.js'
 import type { MetricsCollector } from './interface.js'
-import type { RequestCompleteData, TimeWindow, HistoryQueryParams } from './types.js'
+import type { HistoryQueryParams, RequestCompleteData, TimeWindow } from './types.js'
+import type { BackendStats, StatsDataPoint } from '../../types/backend.js'
 
 /**
  * No-op implementation of MetricsCollector used when metrics are disabled
@@ -52,7 +52,7 @@ export class NoopMetricsCollector implements MetricsCollector {
       successRate: 0,
       averageStreamingTTFT: 0,
       averageNonStreamingTTFT: 0,
-      ttftSamples: []
+      ttftSamples: [],
     }
   }
 }

@@ -1,5 +1,6 @@
 import { mongoDBService } from './mongodb.js'
-import type { RecordedRequest, BackendConfig } from '../types/backend.js'
+
+import type { BackendConfig, RecordedRequest } from '../types/backend.js'
 
 export class RequestRecorder {
   /**
@@ -31,15 +32,18 @@ export class RequestRecorder {
         timestamp: new Date(),
         url,
         headers: { ...headers }, // Clone headers
-        body: typeof body === 'string' ? body : JSON.stringify(body)
+        body: typeof body === 'string' ? body : JSON.stringify(body),
       }
 
       // Insert asynchronously - don't await to avoid blocking
       mongoDBService
         .getRecordedRequestsCollection()
         .insertOne(recordedRequest)
-        .catch(error => {
-          console.error(`[RequestRecorder] Failed to record request for backend ${backend.id}:`, error)
+        .catch((error) => {
+          console.error(
+            `[RequestRecorder] Failed to record request for backend ${backend.id}:`,
+            error
+          )
         })
 
       console.log(`[RequestRecorder] Recorded request for backend ${backend.id}`)

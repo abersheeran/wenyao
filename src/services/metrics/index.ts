@@ -1,7 +1,8 @@
-import type { Db } from 'mongodb'
-import type { MetricsCollector } from './interface.js'
-import { NoopMetricsCollector } from './noop-collector.js'
 import { DbMetricsCollector } from './db-collector.js'
+import { NoopMetricsCollector } from './noop-collector.js'
+
+import type { MetricsCollector } from './interface.js'
+import type { Db } from 'mongodb'
 
 export * from './interface.js'
 export * from './types.js'
@@ -36,7 +37,10 @@ export async function createMetricsCollector(
     console.log('Metrics collection enabled with database backend')
     return collector
   } catch (error) {
-    console.error('Failed to initialize DbMetricsCollector, falling back to NoopMetricsCollector:', error)
+    console.error(
+      'Failed to initialize DbMetricsCollector, falling back to NoopMetricsCollector:',
+      error
+    )
     return new NoopMetricsCollector()
   }
 }
@@ -45,16 +49,13 @@ export async function createMetricsCollector(
  * Validate that metrics-dependent strategies are compatible with metrics config
  * Throws error if validation fails
  */
-export function validateMetricsRequirement(
-  strategy: string,
-  metricsEnabled: boolean
-): void {
+export function validateMetricsRequirement(strategy: string, metricsEnabled: boolean): void {
   const metricsRequiredStrategies = ['lowest-ttft', 'min-error-rate']
 
   if (metricsRequiredStrategies.includes(strategy) && !metricsEnabled) {
     throw new Error(
       `Strategy '${strategy}' requires metrics to be enabled. ` +
-      `Set ENABLE_METRICS=true or use another strategy (e.g., 'weighted', 'round-robin')`
+        `Set ENABLE_METRICS=true or use another strategy (e.g., 'weighted', 'round-robin')`
     )
   }
 }

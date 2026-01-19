@@ -6,9 +6,7 @@ import { concurrencyLimiter } from '../concurrency-limiter.js'
  * Generates Prometheus exposition format from MongoDB metrics
  */
 export class PrometheusExporter {
-  constructor(
-    private storage: MetricsStorage
-  ) {}
+  constructor(private storage: MetricsStorage) {}
 
   /**
    * Generate Prometheus text format metrics
@@ -20,7 +18,7 @@ export class PrometheusExporter {
 
     const statsMap = await this.storage.getAllStats({
       startTime: oneMinuteAgo,
-      endTime: now
+      endTime: now,
     })
 
     const lines: string[] = []
@@ -54,7 +52,9 @@ export class PrometheusExporter {
     // For now, we'll export summary statistics
     for (const [backendId, stats] of statsMap) {
       if (stats.totalRequests > 0) {
-        lines.push(`llm_proxy_request_duration_seconds_count{backend_id="${backendId}"} ${stats.totalRequests}`)
+        lines.push(
+          `llm_proxy_request_duration_seconds_count{backend_id="${backendId}"} ${stats.totalRequests}`
+        )
       }
     }
 

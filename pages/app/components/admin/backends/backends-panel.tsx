@@ -15,6 +15,8 @@ import { AddModelDialog } from "./add-model-dialog";
 import { EditModelDialog } from "./edit-model-dialog";
 import { AddBackendDialog } from "./add-backend-dialog";
 import { EditBackendDialog } from "./edit-backend-dialog";
+import { DeleteConfirmationDialog } from "./delete-confirmation-dialog";
+import { getProviderDisplayName, getProviderBadgeClass } from "../../../config/provider-config";
 
 export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   const [models, setModels] = React.useState<(ModelConfig & { backends: (BackendConfig & { trafficRatio: number })[] })[]>([]);
@@ -23,6 +25,8 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
   const [editingModel, setEditingModel] = React.useState<ModelConfig | null>(null);
   const [addingBackendFor, setAddingBackendFor] = React.useState<string | null>(null);
   const [editingBackend, setEditingBackend] = React.useState<{ model: string; backend: BackendConfig } | null>(null);
+  const [deletingModel, setDeletingModel] = React.useState<string | null>(null);
+  const [deletingBackend, setDeletingBackend] = React.useState<{ model: string; backendId: string } | null>(null);
 
   const [listState, load] = useAsyncFn(async () => {
     try {
@@ -52,6 +56,14 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
   const [updateEnabledState, updateEnabled] = useAsyncFn(
     async (model: string, backendId: string, enabled: boolean) => {
       await api.updateBackend(model, backendId, { enabled });
+      await load();
+    },
+    [api, load]
+  );
+
+  const [updateRecordRequestsState, updateRecordRequests] = useAsyncFn(
+    async (model: string, backendId: string, recordRequests: boolean) => {
+      await api.updateBackend(model, backendId, { recordRequests });
       await load();
     },
     [api, load]
@@ -94,95 +106,85 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
         <h2 className="text-xl font-semibold">Models & Backends</h2>
         <Button onClick={() => setAddModelOpen(true)}>Add Model</Button>
       </div>
-      {(listState.error || deleteModelState.error || updateEnabledState.error || deleteBackendState.error) && (
+      {(listState.error || deleteModelState.error || updateEnabledState.error || updateRecordRequestsState.error || deleteBackendState.error) && (
         <p className="text-sm text-red-600 mb-2">
-          {(listState.error || deleteModelState.error || updateEnabledState.error || deleteBackendState.error)?.message}
+          {(listState.error || deleteModelState.error || updateEnabledState.error || updateRecordRequestsState.error || deleteBackendState.error)?.message}
         </p>
       )}
-      {listState.loading ? (
-        <p className="text-sm text-gray-500">Loading...</p>
-      ) : models.length === 0 ? (
+      {models.length === 0 ? (
         <p className="text-sm text-gray-500">No models configured.</p>
       ) : (
         <div className="space-y-3">
-            {models.map((modelConfig) => {
-              const isExpanded = expandedModels.has(modelConfig.model);
-              const strategyLabel = getStrategyLabel(modelConfig.loadBalancingStrategy);
+          {models.map((modelConfig) => {
+            const isExpanded = expandedModels.has(modelConfig.model);
+            const strategyLabel = getStrategyLabel(modelConfig.loadBalancingStrategy);
 
-              return (
-                <div key={modelConfig.model} className="border rounded-lg shadow-sm hover:shadow-md transition-shadow">
-                  {/* Model header */}
-                  <div className="p-4 bg-gray-50/80 hover:bg-gray-100/80 cursor-pointer transition-colors" onClick={() => toggleModel(modelConfig.model)}>
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      {/* Model name */}
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-gray-400 shrink-0">{isExpanded ? '▼' : '▶'}</span>
-                        <span className="text-lg font-medium break-all">{modelConfig.model}</span>
-                      </div>
+            return (
+              <div key={modelConfig.model} className="border rounded-lg shadow-sm hover:shadow-md transition-shadow">
+                {/* Model header */}
+                <div className="p-4 bg-gray-50/80 hover:bg-gray-100/80 cursor-pointer transition-colors" onClick={() => toggleModel(modelConfig.model)}>
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    {/* Model name */}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-gray-400 shrink-0">{isExpanded ? '▼' : '▶'}</span>
+                      <span className="text-lg font-medium break-all">{modelConfig.model}</span>
+                    </div>
 
-                      {/* Tags and actions */}
-                      <div className="flex items-center gap-3 flex-wrap shrink-0">
-                        <span className={`px-2 py-1 rounded text-xs font-medium whitespace-nowrap ${strategyLabel.color}`}>
-                          {strategyLabel.text}
-                        </span>
-                        <span className="text-sm text-gray-600 whitespace-nowrap">
-                          ({modelConfig.backends.length} backend{modelConfig.backends.length !== 1 ? 's' : ''})
-                        </span>
-                        <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setEditingModel(modelConfig)}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => {
-                              if (confirm(`Delete model ${modelConfig.model} and all its backends?`)) {
-                                deleteModel(modelConfig.model);
-                              }
-                            }}
-                          >
-                            Delete
-                          </Button>
-                        </div>
+                    {/* Tags and actions */}
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className={`px-2 py-1 rounded text-xs font-medium whitespace-nowrap ${getProviderBadgeClass(modelConfig.provider)}`}>
+                        {getProviderDisplayName(modelConfig.provider)}
+                      </span>
+                      <span className={`px-2 py-1 rounded text-xs font-medium whitespace-nowrap ${strategyLabel.color}`}>
+                        {strategyLabel.text}
+                      </span>
+                      <span className="text-sm text-gray-600 whitespace-nowrap">
+                        ({modelConfig.backends.length} backend{modelConfig.backends.length !== 1 ? 's' : ''})
+                      </span>
+                      <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setEditingModel(modelConfig)}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setDeletingModel(modelConfig.model)}
+                        >
+                          Delete
+                        </Button>
                       </div>
                     </div>
                   </div>
+                </div>
 
-                  {/* Backends table (expanded) */}
-                  {isExpanded && (
-                    <div className="p-4 bg-white border-t">
-                      {modelConfig.backends.length === 0 ? (
-                        <p className="text-sm text-gray-500 mb-3">No backends configured for this model.</p>
-                      ) : (
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>ID</TableHead>
-                              <TableHead>URL</TableHead>
-                              <TableHead>Model</TableHead>
-                              <TableHead>Weight</TableHead>
-                              <TableHead>Traffic Ratio</TableHead>
-                              <TableHead>Max Concurrency</TableHead>
-                              <TableHead>Enabled</TableHead>
-                              <TableHead>Actions</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {modelConfig.backends.map((backend) => (
+                {/* Backends table (expanded) */}
+                {isExpanded && (
+                  <div className="p-4 bg-white border-t">
+                    {modelConfig.backends.length === 0 ? (
+                      <p className="text-sm text-gray-500 mb-3">No backends configured for this model.</p>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>ID</TableHead>
+                            <TableHead>Weight</TableHead>
+                            <TableHead>Traffic Ratio</TableHead>
+                            <TableHead>Max Concurrency</TableHead>
+                            <TableHead>TTFT Timeout</TableHead>
+                            <TableHead>Record Requests</TableHead>
+                            <TableHead>Enabled</TableHead>
+                            <TableHead>Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {modelConfig.backends.map((backend) => {
+                            return (
                               <TableRow key={backend.id}>
                                 <TableCell className="font-mono">{backend.id}</TableCell>
-                                <TableCell className="truncate max-w-[300px]" title={backend.url}>{backend.url}</TableCell>
-                                <TableCell className="font-mono text-sm">
-                                  {backend.model ? (
-                                    <span className="text-blue-600" title="转发时使用此模型名">{backend.model}</span>
-                                  ) : (
-                                    <span className="text-gray-400" title="使用客户端请求的模型名">默认</span>
-                                  )}
-                                </TableCell>
                                 <TableCell>{backend.weight}</TableCell>
                                 <TableCell>{((backend as any).trafficRatio * 100).toFixed(1)}%</TableCell>
                                 <TableCell>
@@ -193,6 +195,30 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                                   ) : (
                                     <span className="text-gray-400" title="无限制">∞</span>
                                   )}
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex flex-col gap-1 text-sm">
+                                    {backend.streamingTTFTTimeout !== undefined && backend.streamingTTFTTimeout > 0 ? (
+                                      <span className="font-mono" title="流式请求 TTFT 超时">
+                                        Stream: {backend.streamingTTFTTimeout}ms
+                                      </span>
+                                    ) : null}
+                                    {backend.nonStreamingTTFTTimeout !== undefined && backend.nonStreamingTTFTTimeout > 0 ? (
+                                      <span className="font-mono" title="非流式请求 TTFT 超时">
+                                        Non-Stream: {backend.nonStreamingTTFTTimeout}ms
+                                      </span>
+                                    ) : null}
+                                    {(!backend.streamingTTFTTimeout || backend.streamingTTFTTimeout === 0) &&
+                                      (!backend.nonStreamingTTFTTimeout || backend.nonStreamingTTFTTimeout === 0) ? (
+                                      <span className="text-gray-400" title="未配置超时">-</span>
+                                    ) : null}
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <Switch
+                                    checked={backend.recordRequests ?? false}
+                                    onCheckedChange={(checked) => updateRecordRequests(modelConfig.model, backend.id, checked)}
+                                  />
                                 </TableCell>
                                 <TableCell>
                                   <Switch
@@ -212,31 +238,29 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                                     <Button
                                       variant="destructive"
                                       size="sm"
-                                      onClick={() => {
-                                        if (confirm(`Delete backend ${backend.id}?`)) {
-                                          deleteBackend(modelConfig.model, backend.id);
-                                        }
-                                      }}
+                                      onClick={() => setDeletingBackend({ model: modelConfig.model, backendId: backend.id })}
                                     >
                                       Delete
                                     </Button>
                                   </div>
                                 </TableCell>
                               </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      )}
-                      <div className="mt-3">
-                        <Button variant="outline" size="sm" onClick={() => setAddingBackendFor(modelConfig.model)}>
-                          + Add Backend
-                        </Button>
-                      </div>
+                            )
+                          }
+                          )}
+                        </TableBody>
+                      </Table>
+                    )}
+                    <div className="mt-3">
+                      <Button variant="outline" size="sm" onClick={() => setAddingBackendFor(modelConfig.model)}>
+                        + Add Backend
+                      </Button>
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -253,6 +277,7 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
       <AddBackendDialog
         open={!!addingBackendFor}
         model={addingBackendFor}
+        provider={addingBackendFor ? models.find(m => m.model === addingBackendFor)?.provider ?? null : null}
         onOpenChange={(v) => !v && setAddingBackendFor(null)}
         onAdded={() => {
           setAddingBackendFor(null);
@@ -268,6 +293,34 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
           setEditingBackend(null);
           load();
         }}
+      />
+      <DeleteConfirmationDialog
+        open={!!deletingModel}
+        onOpenChange={(v) => !v && setDeletingModel(null)}
+        title="Delete Model"
+        description={`This will permanently delete the model "${deletingModel}" and all its backends. This action cannot be undone.`}
+        expectedInput={deletingModel ?? ""}
+        onConfirm={async () => {
+          if (deletingModel) {
+            await deleteModel(deletingModel);
+            setDeletingModel(null);
+          }
+        }}
+        isDeleting={deleteModelState.loading}
+      />
+      <DeleteConfirmationDialog
+        open={!!deletingBackend}
+        onOpenChange={(v) => !v && setDeletingBackend(null)}
+        title="Delete Backend"
+        description={`This will permanently delete the backend. This action cannot be undone.`}
+        expectedInput={deletingBackend ? `${deletingBackend.model}/${deletingBackend.backendId}` : ""}
+        onConfirm={async () => {
+          if (deletingBackend) {
+            await deleteBackend(deletingBackend.model, deletingBackend.backendId);
+            setDeletingBackend(null);
+          }
+        }}
+        isDeleting={deleteBackendState.loading}
       />
     </div>
   );

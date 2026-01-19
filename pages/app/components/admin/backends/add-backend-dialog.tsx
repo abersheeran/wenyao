@@ -9,36 +9,54 @@ import {
   DialogTitle,
 } from "../../ui/dialog";
 import { Switch } from "../../ui/switch";
-import { useAdminApi, type BackendConfig } from "~/apis";
+import { useAdminApi, type BackendConfig, type ProviderType, type OpenAIConfig, type BedrockConfig } from "~/apis";
+import { getProviderDisplayName, createDefaultProviderConfig, PROVIDER_UI_CONFIG } from "../../../config/provider-config";
 
-export function AddBackendDialog({ open, onOpenChange, model, onAdded }: {
+export function AddBackendDialog({ open, onOpenChange, model, provider, onAdded }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   model: string | null;
+  provider: ProviderType | null;
   onAdded: () => void;
 }) {
   const api = useAdminApi();
-  const [form, setForm] = React.useState<BackendConfig>({
-    id: "",
-    url: "",
-    apiKey: "",
-    weight: 1,
-    enabled: true,
-    model: undefined,
-    streamingTTFTTimeout: 0,
-    nonStreamingTTFTTimeout: 0,
-    recordRequests: false,
-    maxConcurrentRequests: 0
-  });
+
+  const createInitialForm = (prov: ProviderType): BackendConfig => {
+    const providerConfig = PROVIDER_UI_CONFIG[prov];
+    return {
+      id: "",
+      provider: prov,
+      weight: 1,
+      enabled: true,
+      model: undefined,
+      streamingTTFTTimeout: 0,
+      nonStreamingTTFTTimeout: 0,
+      recordRequests: false,
+      maxConcurrentRequests: 0,
+      [providerConfig.configField]: createDefaultProviderConfig(prov),
+    } as BackendConfig;
+  };
+
+  const [form, setForm] = React.useState<BackendConfig>(
+    createInitialForm(provider || "openai")
+  );
+
+  // Update form when provider changes
+  React.useEffect(() => {
+    if (provider) {
+      setForm(createInitialForm(provider));
+    }
+  }, [provider]);
 
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!model) return;
+    if (!model || !provider) return;
     await api.addBackend(model, form);
-    setForm({ id: "", url: "", apiKey: "", weight: 1, enabled: true, model: undefined, streamingTTFTTimeout: 0, nonStreamingTTFTTimeout: 0, recordRequests: false, maxConcurrentRequests: 0 });
+    // Reset form
+    setForm(createInitialForm(provider));
     onOpenChange(false);
     onAdded();
-  }, [api, model, form, onOpenChange, onAdded]);
+  }, [api, model, provider, form, onOpenChange, onAdded]);
 
   if (!model) return null;
 
@@ -57,15 +75,64 @@ export function AddBackendDialog({ open, onOpenChange, model, onAdded }: {
 
           {/* Backend Configuration Section */}
           <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
-            <h4 className="text-sm font-medium text-gray-700">Backend 配置</h4>
-            <div>
-              <label className="block text-sm mb-1">URL</label>
-              <Input required value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://api.example.com" />
-            </div>
-            <div>
-              <label className="block text-sm mb-1">API Key</label>
-              <Input required value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder="sk-..." />
-            </div>
+            <h4 className="text-sm font-medium text-gray-700">Backend 配置 ({provider && getProviderDisplayName(provider)})</h4>
+
+            {provider === "openai" && form.openaiConfig && (
+              <>
+                <div>
+                  <label className="block text-sm mb-1">URL</label>
+                  <Input
+                    required
+                    value={form.openaiConfig.url}
+                    onChange={(e) => setForm({ ...form, openaiConfig: { ...form.openaiConfig!, url: e.target.value } })}
+                    placeholder="https://api.openai.com/v1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">API Key</label>
+                  <Input
+                    required
+                    value={form.openaiConfig.apiKey}
+                    onChange={(e) => setForm({ ...form, openaiConfig: { ...form.openaiConfig!, apiKey: e.target.value } })}
+                    placeholder="sk-..."
+                  />
+                </div>
+              </>
+            )}
+
+            {provider === "bedrock" && form.bedrockConfig && (
+              <>
+                <div>
+                  <label className="block text-sm mb-1">AWS Region</label>
+                  <Input
+                    required
+                    value={form.bedrockConfig.region}
+                    onChange={(e) => setForm({ ...form, bedrockConfig: { ...form.bedrockConfig!, region: e.target.value } })}
+                    placeholder="us-east-1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Access Key ID</label>
+                  <Input
+                    required
+                    value={form.bedrockConfig.accessKeyId}
+                    onChange={(e) => setForm({ ...form, bedrockConfig: { ...form.bedrockConfig!, accessKeyId: e.target.value } })}
+                    placeholder="AKIAIOSFODNN7EXAMPLE"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Secret Access Key</label>
+                  <Input
+                    required
+                    type="password"
+                    value={form.bedrockConfig.secretAccessKey}
+                    onChange={(e) => setForm({ ...form, bedrockConfig: { ...form.bedrockConfig!, secretAccessKey: e.target.value } })}
+                    placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                  />
+                </div>
+              </>
+            )}
+
             <div>
               <label className="block text-sm mb-1">Model (可选)</label>
               <Input

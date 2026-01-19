@@ -1,8 +1,11 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest'
-import { MongoClient, Db } from 'mongodb'
+import { Db, MongoClient } from 'mongodb'
 import { createClient, type RedisClientType } from 'redis'
-import { ConcurrencyLimiter } from '../services/concurrency-limiter.js'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+
+import { createTestOpenAIBackend } from './helpers.js'
 import { createActiveRequestStore } from '../services/active-requests/index.js'
+import { ConcurrencyLimiter } from '../services/concurrency-limiter.js'
+
 import type { BackendConfig } from '../types/backend.js'
 
 describe('ConcurrencyLimiter', () => {
@@ -54,26 +57,20 @@ describe('ConcurrencyLimiter', () => {
           try {
             await db.collection('active_requests').deleteMany({})
           } catch (error) {
-            // Collection might not exist
+            // Collection might not exist, ignore error
           }
 
           const store = createActiveRequestStore({
             type: 'mongodb',
             instanceId: 'test-instance',
-            db
+            db,
           })
           await store.initialize()
           limiter.initialize(store)
         } else if (storeName === 'redis' && redisClient) {
           try {
-            const keys = await redisClient.keys('active_requests:*')
-            if (keys.length > 0) {
-              await redisClient.del(keys)
-            }
-            const instanceKeys = await redisClient.keys('instance_requests:*')
-            if (instanceKeys.length > 0) {
-              await redisClient.del(instanceKeys)
-            }
+            // Use FLUSHDB to clean all keys in the current database
+            await redisClient.flushDb()
           } catch (error) {
             console.warn('Failed to cleanup Redis:', error)
           }
@@ -81,7 +78,7 @@ describe('ConcurrencyLimiter', () => {
           const store = createActiveRequestStore({
             type: 'redis',
             instanceId: 'test-instance',
-            redis: redisClient
+            redis: redisClient,
           })
           await store.initialize()
           limiter.initialize(store)
@@ -104,14 +101,10 @@ describe('ConcurrencyLimiter', () => {
 
       it('should always allow when not enabled', async () => {
         const uninitializedLimiter = new ConcurrencyLimiter()
-        const backend: BackendConfig = {
+        const backend = createTestOpenAIBackend({
           id: 'backend-1',
-          url: 'https://test.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true,
-          maxConcurrentRequests: 1
-        }
+          maxConcurrentRequests: 1,
+        })
 
         const result = await uninitializedLimiter.tryAcquire(backend, 'req-1')
         expect(result).toBe(true)
@@ -123,14 +116,10 @@ describe('ConcurrencyLimiter', () => {
           return
         }
 
-        const backend: BackendConfig = {
+        const backend = createTestOpenAIBackend({
           id: 'backend-1',
-          url: 'https://test.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true
           // No maxConcurrentRequests
-        }
+        })
 
         const result1 = await limiter.tryAcquire(backend, 'req-1')
         expect(result1).toBe(true)
@@ -148,14 +137,10 @@ describe('ConcurrencyLimiter', () => {
           return
         }
 
-        const backend: BackendConfig = {
+        const backend = createTestOpenAIBackend({
           id: 'backend-1',
-          url: 'https://test.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true,
-          maxConcurrentRequests: 2
-        }
+          maxConcurrentRequests: 2,
+        })
 
         // First two should succeed
         const result1 = await limiter.tryAcquire(backend, 'req-1')
@@ -175,14 +160,10 @@ describe('ConcurrencyLimiter', () => {
           return
         }
 
-        const backend: BackendConfig = {
+        const backend = createTestOpenAIBackend({
           id: 'backend-1',
-          url: 'https://test.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true,
-          maxConcurrentRequests: 2
-        }
+          maxConcurrentRequests: 2,
+        })
 
         await limiter.tryAcquire(backend, 'req-1')
         await limiter.tryAcquire(backend, 'req-2')
@@ -205,13 +186,9 @@ describe('ConcurrencyLimiter', () => {
           return
         }
 
-        const backend: BackendConfig = {
+        const backend = createTestOpenAIBackend({
           id: 'backend-1',
-          url: 'https://test.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true
-        }
+        })
 
         expect(await limiter.getActiveRequestCount(backend.id)).toBe(0)
 
@@ -231,23 +208,15 @@ describe('ConcurrencyLimiter', () => {
           return
         }
 
-        const backend1: BackendConfig = {
+        const backend1 = createTestOpenAIBackend({
           id: 'backend-1',
-          url: 'https://test1.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true,
-          maxConcurrentRequests: 1
-        }
+          maxConcurrentRequests: 1,
+        })
 
-        const backend2: BackendConfig = {
+        const backend2 = createTestOpenAIBackend({
           id: 'backend-2',
-          url: 'https://test2.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true,
-          maxConcurrentRequests: 2
-        }
+          maxConcurrentRequests: 2,
+        })
 
         // Backend 1: limit of 1
         expect(await limiter.tryAcquire(backend1, 'req-1')).toBe(true)
@@ -265,14 +234,10 @@ describe('ConcurrencyLimiter', () => {
           return
         }
 
-        const backend: BackendConfig = {
+        const backend = createTestOpenAIBackend({
           id: 'backend-1',
-          url: 'https://test.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true,
-          maxConcurrentRequests: 0 // 0 means no limit
-        }
+          maxConcurrentRequests: 0, // 0 means no limit
+        })
 
         for (let i = 0; i < 10; i++) {
           const result = await limiter.tryAcquire(backend, `req-${i}`)
@@ -298,18 +263,14 @@ describe('ConcurrencyLimiter', () => {
           getCount: async () => 0,
           getAllCounts: async () => ({}),
           cleanup: async () => 0,
-          shutdown: async () => {}
+          shutdown: async () => {},
         }
         brokenLimiter.initialize(mockStore)
 
-        const backend: BackendConfig = {
+        const backend = createTestOpenAIBackend({
           id: 'backend-1',
-          url: 'https://test.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true,
-          maxConcurrentRequests: 1
-        }
+          maxConcurrentRequests: 1,
+        })
 
         // Should return true (fail open) on error
         const result = await brokenLimiter.tryAcquire(backend, 'req-1')
@@ -320,9 +281,7 @@ describe('ConcurrencyLimiter', () => {
         const uninitializedLimiter = new ConcurrencyLimiter()
 
         // Should not throw
-        await expect(
-          uninitializedLimiter.release('backend-1', 'req-1')
-        ).resolves.not.toThrow()
+        await expect(uninitializedLimiter.release('backend-1', 'req-1')).resolves.not.toThrow()
       })
 
       it('should return 0 count when not enabled', async () => {
@@ -335,9 +294,7 @@ describe('ConcurrencyLimiter', () => {
         const uninitializedLimiter = new ConcurrencyLimiter()
 
         // Should not throw
-        await expect(
-          uninitializedLimiter.recordStart('backend-1', 'req-1')
-        ).resolves.not.toThrow()
+        await expect(uninitializedLimiter.recordStart('backend-1', 'req-1')).resolves.not.toThrow()
       })
 
       it('should handle concurrent operations safely', async () => {
@@ -346,14 +303,10 @@ describe('ConcurrencyLimiter', () => {
           return
         }
 
-        const backend: BackendConfig = {
+        const backend = createTestOpenAIBackend({
           id: 'backend-1',
-          url: 'https://test.com',
-          apiKey: 'key',
-          weight: 1,
-          enabled: true,
-          maxConcurrentRequests: 5
-        }
+          maxConcurrentRequests: 5,
+        })
 
         // Simulate 10 concurrent requests trying to acquire
         const promises = Array.from({ length: 10 }, (_, i) =>
@@ -361,7 +314,7 @@ describe('ConcurrencyLimiter', () => {
         )
 
         const results = await Promise.all(promises)
-        const successCount = results.filter(r => r === true).length
+        const successCount = results.filter((r) => r === true).length
 
         // Should allow exactly up to maxConcurrentRequests
         expect(successCount).toBeLessThanOrEqual(5)
