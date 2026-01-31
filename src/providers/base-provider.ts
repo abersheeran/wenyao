@@ -408,12 +408,7 @@ export abstract class BaseProvider {
    * Override this in subclass if header processing is needed
    */
   protected processHeaders(headers: Headers): Headers {
-    const newHeaders = new Headers()
-    const contentType = headers.get('content-type')
-    if (contentType) {
-      newHeaders.set('content-type', contentType)
-    }
-    return newHeaders
+    return headers
   }
 
   /**
