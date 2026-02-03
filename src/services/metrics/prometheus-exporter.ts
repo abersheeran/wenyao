@@ -1,5 +1,6 @@
 import { MetricsStorage } from './storage.js'
 import { concurrencyLimiter } from '../concurrency-limiter.js'
+import { configManager } from '../config-manager.js'
 
 /**
  * Prometheus text format exporter
@@ -21,26 +22,47 @@ export class PrometheusExporter {
       endTime: now,
     })
 
+    const backendIds: string[] = []
+    const seenBackendIds = new Set<string>()
+
+    const addBackendId = (backendId: string) => {
+      if (seenBackendIds.has(backendId)) {
+        return
+      }
+      seenBackendIds.add(backendId)
+      backendIds.push(backendId)
+    }
+
+    // Prefer configured backends first (stable ordering), then include any with recent stats.
+    for (const model of configManager.getAllModels()) {
+      for (const backend of model.backends) {
+        if (backend.enabled) {
+          addBackendId(backend.id)
+        }
+      }
+    }
+
+    for (const backendId of statsMap.keys()) {
+      addBackendId(backendId)
+    }
+
     const lines: string[] = []
 
     // === Total Requests Counter ===
     lines.push('# HELP llm_proxy_requests_total Total number of requests per backend')
     lines.push('# TYPE llm_proxy_requests_total counter')
 
-    for (const [backendId, stats] of statsMap) {
-      const successCount = stats.successfulRequests
-      const failureCount = stats.failedRequests
+    for (const backendId of backendIds) {
+      const stats = statsMap.get(backendId)
+      const successCount = stats?.successfulRequests ?? 0
+      const failureCount = stats?.failedRequests ?? 0
 
-      if (successCount > 0) {
-        lines.push(
-          `llm_proxy_requests_total{backend_id="${backendId}",status="success"} ${successCount}`
-        )
-      }
-      if (failureCount > 0) {
-        lines.push(
-          `llm_proxy_requests_total{backend_id="${backendId}",status="failure"} ${failureCount}`
-        )
-      }
+      lines.push(
+        `llm_proxy_requests_total{backend_id="${backendId}",status="success"} ${successCount}`
+      )
+      lines.push(
+        `llm_proxy_requests_total{backend_id="${backendId}",status="failure"} ${failureCount}`
+      )
     }
 
     // === Request Duration Histogram ===
@@ -50,12 +72,12 @@ export class PrometheusExporter {
 
     // Note: For true histogram support, we'd need to store duration buckets
     // For now, we'll export summary statistics
-    for (const [backendId, stats] of statsMap) {
-      if (stats.totalRequests > 0) {
-        lines.push(
-          `llm_proxy_request_duration_seconds_count{backend_id="${backendId}"} ${stats.totalRequests}`
-        )
-      }
+    for (const backendId of backendIds) {
+      const stats = statsMap.get(backendId)
+      const totalRequests = stats?.totalRequests ?? 0
+      lines.push(
+        `llm_proxy_request_duration_seconds_count{backend_id="${backendId}"} ${totalRequests}`
+      )
     }
 
     // === TTFT Histogram ===
@@ -63,28 +85,30 @@ export class PrometheusExporter {
     lines.push('# HELP llm_proxy_ttft_seconds Time to first token in seconds')
     lines.push('# TYPE llm_proxy_ttft_seconds histogram')
 
-    for (const [backendId, stats] of statsMap) {
+    for (const backendId of backendIds) {
+      const stats = statsMap.get(backendId)
+
       // Streaming TTFT
-      if (stats.averageStreamingTTFT > 0) {
-        const ttftSeconds = stats.averageStreamingTTFT / 1000
-        lines.push(
-          `llm_proxy_ttft_seconds_sum{backend_id="${backendId}",stream_type="streaming"} ${ttftSeconds.toFixed(3)}`
-        )
-        lines.push(
-          `llm_proxy_ttft_seconds_count{backend_id="${backendId}",stream_type="streaming"} 1`
-        )
-      }
+      const streamingAvgMs = stats?.averageStreamingTTFT ?? 0
+      const streamingSumSeconds = streamingAvgMs > 0 ? streamingAvgMs / 1000 : 0
+      const streamingCount = streamingAvgMs > 0 ? 1 : 0
+      lines.push(
+        `llm_proxy_ttft_seconds_sum{backend_id="${backendId}",stream_type="streaming"} ${streamingSumSeconds.toFixed(3)}`
+      )
+      lines.push(
+        `llm_proxy_ttft_seconds_count{backend_id="${backendId}",stream_type="streaming"} ${streamingCount}`
+      )
 
       // Non-streaming TTFT
-      if (stats.averageNonStreamingTTFT > 0) {
-        const ttftSeconds = stats.averageNonStreamingTTFT / 1000
-        lines.push(
-          `llm_proxy_ttft_seconds_sum{backend_id="${backendId}",stream_type="non-streaming"} ${ttftSeconds.toFixed(3)}`
-        )
-        lines.push(
-          `llm_proxy_ttft_seconds_count{backend_id="${backendId}",stream_type="non-streaming"} 1`
-        )
-      }
+      const nonStreamingAvgMs = stats?.averageNonStreamingTTFT ?? 0
+      const nonStreamingSumSeconds = nonStreamingAvgMs > 0 ? nonStreamingAvgMs / 1000 : 0
+      const nonStreamingCount = nonStreamingAvgMs > 0 ? 1 : 0
+      lines.push(
+        `llm_proxy_ttft_seconds_sum{backend_id="${backendId}",stream_type="non-streaming"} ${nonStreamingSumSeconds.toFixed(3)}`
+      )
+      lines.push(
+        `llm_proxy_ttft_seconds_count{backend_id="${backendId}",stream_type="non-streaming"} ${nonStreamingCount}`
+      )
     }
 
     // === Success Rate Gauge ===
@@ -92,12 +116,13 @@ export class PrometheusExporter {
     lines.push('# HELP llm_proxy_success_rate Success rate per backend (0.0 to 1.0)')
     lines.push('# TYPE llm_proxy_success_rate gauge')
 
-    for (const [backendId, stats] of statsMap) {
-      if (stats.totalRequests > 0) {
-        lines.push(
-          `llm_proxy_success_rate{backend_id="${backendId}"} ${stats.successRate.toFixed(4)}`
-        )
-      }
+    for (const backendId of backendIds) {
+      const stats = statsMap.get(backendId)
+      const totalRequests = stats?.totalRequests ?? 0
+      const successRate = totalRequests > 0 ? stats!.successRate : 1
+      lines.push(
+        `llm_proxy_success_rate{backend_id="${backendId}"} ${successRate.toFixed(4)}`
+      )
     }
 
     // === Active Requests Gauge ===
@@ -109,10 +134,9 @@ export class PrometheusExporter {
     if (concurrencyLimiter.isEnabled()) {
       try {
         const activeCounts = await concurrencyLimiter.getAllActiveRequestCounts()
-        for (const [backendId, activeCount] of Object.entries(activeCounts)) {
-          if (activeCount > 0) {
-            lines.push(`llm_proxy_active_requests{backend_id="${backendId}"} ${activeCount}`)
-          }
+        for (const backendId of backendIds) {
+          const activeCount = activeCounts[backendId] ?? 0
+          lines.push(`llm_proxy_active_requests{backend_id="${backendId}"} ${activeCount}`)
         }
       } catch (error) {
         console.error('Failed to get all active request counts for Prometheus:', error)
