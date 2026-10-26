@@ -1,279 +1,142 @@
-import { mongoDBService } from './mongodb.js'
-
-import type { ConfigManager } from './config-manager.js'
 import type { AffinityMapping, BackendConfig } from '../types/backend.js'
 
-/**
- * Affinity Manager
- *
- * Manages "Session Affinity" (sticky sessions) between clients and backends.
- * Ensures that requests with the same session ID are routed to the same backend
- * when possible, improving cache consistency and performance.
- *
- * Supports in-memory caching and persistent storage via MongoDB.
- */
-export class AffinityManager {
-  /** In-memory cache for fast lookup: key = "model:sessionId", value = backendId */
-  private affinityCache: Map<string, string> = new Map()
-  /** Maximum number of entries in the in-memory cache */
-  private readonly cacheMaxSize = 10000
+interface AffinityRow {
+  model: string
+  session_id: string
+  backend_id: string
+  created_at: number
+  last_accessed_at: number
+  access_count: number
+}
 
-  /**
-   * Generates a unique cache key for a specific model and session.
-   */
-  private getCacheKey(model: string, sessionId: string): string {
-    return `${model}:${sessionId}`
-  }
+interface AffinityFilter {
+  model?: string
+  sessionId?: string
+  backendId?: string
+}
 
-  /**
-   * Retrieves the backend assigned to a specific session.
-   * Logic flow:
-   * 1. Check in-memory cache.
-   * 2. If not found and MongoDB is connected, check MongoDB.
-   * 3. If found, verify that the backend is still enabled and has non-zero weight.
-   * 4. If backend is invalid, clear the mapping.
-   *
-   * @param model - The model name
-   * @param sessionId - The session identifier
-   * @param configManager - The configuration manager to verify backend status
-   * @returns The assigned backend configuration, or null if no valid mapping exists.
-   */
-  async getAffinityBackend(
-    model: string,
-    sessionId: string,
-    configManager: ConfigManager
-  ): Promise<BackendConfig | null> {
-    // Check cache first (hot path optimization)
-    const cacheKey = this.getCacheKey(model, sessionId)
-    let backendId = this.affinityCache.get(cacheKey)
+const MAX_AGE_MS = 60 * 60 * 1000
 
-    // If not in cache, check MongoDB
-    if (!backendId && mongoDBService.isConnected()) {
-      try {
-        const collection = mongoDBService.getAffinityMappingsCollection()
-        const mapping = await collection.findOne({ model, sessionId })
-
-        if (mapping) {
-          backendId = mapping.backendId
-          // Update cache
-          this.updateCache(cacheKey, backendId)
-
-          // Update lastAccessedAt asynchronously (don't block)
-          collection
-            .updateOne(
-              { model, sessionId },
-              {
-                $set: { lastAccessedAt: new Date() },
-                $inc: { accessCount: 1 },
-              }
-            )
-            .catch((err) => console.error('Failed to update affinity access time:', err))
-        }
-      } catch (error) {
-        console.error(`Error fetching affinity mapping for ${model}:${sessionId}:`, error)
-        return null
-      }
-    }
-
-    if (!backendId) return null
-
-    // Verify backend exists and is enabled
-    const backend = configManager.getBackend(model, backendId)
-    if (!backend || !backend.enabled || backend.weight === 0) {
-      // Backend no longer valid, clean up mapping
-      this.clearMappings({ model, sessionId }).catch((err) =>
-        console.error('Failed to cleanup invalid affinity:', err)
-      )
-      return null
-    }
-
-    return backend
-  }
-
-  /**
-   * Sets or updates the backend affinity for a session.
-   * Persists the mapping to MongoDB and updates the in-memory cache.
-   *
-   * @param model - The model name
-   * @param sessionId - The session identifier
-   * @param backendId - The ID of the backend to attach to the session
-   */
-  async setAffinityBackend(model: string, sessionId: string, backendId: string): Promise<void> {
-    if (!mongoDBService.isConnected()) {
-      console.warn('MongoDB not connected, affinity will not persist')
-      return
-    }
-
-    try {
-      const collection = mongoDBService.getAffinityMappingsCollection()
-      const now = new Date()
-
-      // Upsert: create new or update existing
-      await collection.updateOne(
-        { model, sessionId },
-        {
-          $set: {
-            backendId,
-            lastAccessedAt: now,
-          },
-          $setOnInsert: {
-            createdAt: now,
-            accessCount: 0,
-          },
-        },
-        { upsert: true }
-      )
-
-      // Update cache
-      const cacheKey = this.getCacheKey(model, sessionId)
-      this.updateCache(cacheKey, backendId)
-
-      console.log(`Set affinity: ${model}:${sessionId} -> ${backendId}`)
-    } catch (error) {
-      console.error('Error setting affinity mapping:', error)
-    }
-  }
-
-  private updateCache(key: string, value: string): void {
-    // Simple LRU: if cache full, delete oldest entry
-    if (this.affinityCache.size >= this.cacheMaxSize) {
-      const firstKey = this.affinityCache.keys().next().value
-      if (firstKey !== undefined) {
-        this.affinityCache.delete(firstKey)
-      }
-    }
-    this.affinityCache.set(key, value)
-  }
-
-  /**
-   * Clean up all affinity mappings for a deleted backend
-   * Called when backend is removed from configuration
-   */
-  async cleanupBackendMappings(backendId: string): Promise<number> {
-    if (!mongoDBService.isConnected()) return 0
-
-    try {
-      const collection = mongoDBService.getAffinityMappingsCollection()
-      const result = await collection.deleteMany({ backendId })
-
-      // Clear from cache
-      for (const [key, value] of this.affinityCache.entries()) {
-        if (value === backendId) {
-          this.affinityCache.delete(key)
-        }
-      }
-
-      console.log(`Cleaned up ${result.deletedCount} affinity mappings for backend ${backendId}`)
-      return result.deletedCount || 0
-    } catch (error) {
-      console.error(`Error cleaning up affinity mappings for backend ${backendId}:`, error)
-      return 0
-    }
-  }
-
-  /**
-   * Clean up all affinity mappings for a model
-   * Called when model is deleted
-   */
-  async cleanupModelMappings(model: string): Promise<number> {
-    if (!mongoDBService.isConnected()) return 0
-
-    try {
-      const collection = mongoDBService.getAffinityMappingsCollection()
-      const result = await collection.deleteMany({ model })
-
-      // Clear from cache
-      const prefix = `${model}:`
-      for (const key of this.affinityCache.keys()) {
-        if (key.startsWith(prefix)) {
-          this.affinityCache.delete(key)
-        }
-      }
-
-      console.log(`Cleaned up ${result.deletedCount} affinity mappings for model ${model}`)
-      return result.deletedCount || 0
-    } catch (error) {
-      console.error(`Error cleaning up affinity mappings for model ${model}:`, error)
-      return 0
-    }
-  }
-
-  /**
-   * Admin API: Get all affinity mappings (paginated)
-   */
-  async getAllMappings(
-    filter?: { model?: string; backendId?: string },
-    limit: number = 100,
-    offset: number = 0
-  ): Promise<{ mappings: AffinityMapping[]; total: number }> {
-    if (!mongoDBService.isConnected()) {
-      return { mappings: [], total: 0 }
-    }
-
-    try {
-      const collection = mongoDBService.getAffinityMappingsCollection()
-      const query = filter || {}
-
-      const [mappings, total] = await Promise.all([
-        collection.find(query).sort({ lastAccessedAt: -1 }).skip(offset).limit(limit).toArray(),
-        collection.countDocuments(query),
-      ])
-
-      return { mappings, total }
-    } catch (error) {
-      console.error('Error fetching affinity mappings:', error)
-      return { mappings: [], total: 0 }
-    }
-  }
-
-  /**
-   * Admin API: Clear affinity mappings
-   */
-  async clearMappings(filter?: {
-    model?: string
-    sessionId?: string
-    backendId?: string
-  }): Promise<number> {
-    if (!mongoDBService.isConnected()) return 0
-
-    try {
-      const collection = mongoDBService.getAffinityMappingsCollection()
-      const query = filter || {}
-
-      const result = await collection.deleteMany(query)
-
-      // Clear entire cache if no specific filter
-      if (!filter || Object.keys(filter).length === 0) {
-        this.affinityCache.clear()
-      } else {
-        // Selective cache invalidation
-        if (filter.model && filter.sessionId) {
-          const key = this.getCacheKey(filter.model, filter.sessionId)
-          this.affinityCache.delete(key)
-        } else if (filter.model) {
-          const prefix = `${filter.model}:`
-          for (const key of this.affinityCache.keys()) {
-            if (key.startsWith(prefix)) {
-              this.affinityCache.delete(key)
-            }
-          }
-        } else if (filter.backendId) {
-          for (const [key, value] of this.affinityCache.entries()) {
-            if (value === filter.backendId) {
-              this.affinityCache.delete(key)
-            }
-          }
-        }
-      }
-
-      console.log(`Cleared ${result.deletedCount} affinity mappings`)
-      return result.deletedCount || 0
-    } catch (error) {
-      console.error('Error clearing affinity mappings:', error)
-      return 0
-    }
+function fromRow(row: AffinityRow): AffinityMapping {
+  return {
+    model: row.model,
+    sessionId: row.session_id,
+    backendId: row.backend_id,
+    createdAt: new Date(row.created_at),
+    lastAccessedAt: new Date(row.last_accessed_at),
+    accessCount: row.access_count,
   }
 }
 
-// Singleton instance
-export const affinityManager = new AffinityManager()
+function where(
+  filter: AffinityFilter = {},
+  includeExpiry = false
+): { sql: string; values: (string | number)[] } {
+  const clauses: string[] = []
+  const values: (string | number)[] = []
+  if (includeExpiry) {
+    clauses.push('last_accessed_at > ?')
+    values.push(Date.now() - MAX_AGE_MS)
+  }
+  for (const [field, column] of [
+    ['model', 'model'],
+    ['sessionId', 'session_id'],
+    ['backendId', 'backend_id'],
+  ] as const) {
+    if (filter[field] !== undefined) {
+      clauses.push(`${column} = ?`)
+      values.push(filter[field])
+    }
+  }
+  return { sql: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', values }
+}
+
+export class AffinityManager {
+  constructor(private readonly db: D1Database) {}
+
+  async getMapping(model: string, sessionId: string): Promise<AffinityMapping | null> {
+    const row = await this.db
+      .prepare(
+        'SELECT * FROM affinity_mappings WHERE model = ? AND session_id = ? AND last_accessed_at > ?'
+      )
+      .bind(model, sessionId, Date.now() - MAX_AGE_MS)
+      .first<AffinityRow>()
+    return row ? fromRow(row) : null
+  }
+
+  async getAffinityBackend(
+    model: string,
+    sessionId: string,
+    backends: BackendConfig[],
+    ctx?: Pick<ExecutionContext, 'waitUntil'>
+  ): Promise<BackendConfig | null> {
+    const mapping = await this.getMapping(model, sessionId)
+    if (!mapping) return null
+    const backend = backends.find(
+      (candidate) => candidate.id === mapping.backendId && candidate.enabled && candidate.weight > 0
+    )
+    if (backend) return backend
+    const cleanup = this.clearMappings({ model, sessionId }).catch((error) => {
+      console.error('Failed to remove invalid affinity mapping:', error)
+    })
+    if (ctx) ctx.waitUntil(cleanup)
+    else await cleanup
+    return null
+  }
+
+  upsertStatement(model: string, sessionId: string, backendId: string): D1PreparedStatement {
+    const now = Date.now()
+    return this.db
+      .prepare(
+        `INSERT INTO affinity_mappings
+      (model, session_id, backend_id, created_at, last_accessed_at, access_count)
+      VALUES (?, ?, ?, ?, ?, 1)
+      ON CONFLICT (model, session_id) DO UPDATE SET backend_id = excluded.backend_id,
+        last_accessed_at = excluded.last_accessed_at, access_count = access_count + 1`
+      )
+      .bind(model, sessionId, backendId, now, now)
+  }
+
+  async setAffinityBackend(model: string, sessionId: string, backendId: string): Promise<void> {
+    await this.upsertStatement(model, sessionId, backendId).run()
+  }
+
+  async getAllMappings(
+    filter: AffinityFilter = {},
+    limit = 100,
+    offset = 0
+  ): Promise<{ mappings: AffinityMapping[]; total: number }> {
+    const clause = where(filter, true)
+    const [rows, count] = await this.db.batch([
+      this.db
+        .prepare(
+          `SELECT * FROM affinity_mappings${clause.sql} ORDER BY last_accessed_at DESC LIMIT ? OFFSET ?`
+        )
+        .bind(...clause.values, limit, offset),
+      this.db
+        .prepare(`SELECT COUNT(*) AS total FROM affinity_mappings${clause.sql}`)
+        .bind(...clause.values),
+    ])
+    return {
+      mappings: (rows.results as unknown as AffinityRow[]).map(fromRow),
+      total: (count.results[0] as { total: number }).total,
+    }
+  }
+
+  async clearMappings(filter: AffinityFilter = {}): Promise<number> {
+    const clause = where(filter)
+    const result = await this.db
+      .prepare(`DELETE FROM affinity_mappings${clause.sql}`)
+      .bind(...clause.values)
+      .run()
+    return result.meta.changes
+  }
+
+  async cleanupBackendMappings(backendId: string): Promise<number> {
+    return this.clearMappings({ backendId })
+  }
+
+  async cleanupModelMappings(model: string): Promise<number> {
+    return this.clearMappings({ model })
+  }
+}

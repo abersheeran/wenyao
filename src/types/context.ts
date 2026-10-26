@@ -1,10 +1,6 @@
 import type { ApiKey } from './apikey.js'
+import type { ModelConfig } from './backend.js'
 
-/**
- * Custom context variables for Hono
- * This extends the Hono context type to include custom variables
- * that are set via c.set() in middleware
- */
-export type Variables = {
-  apiKey: ApiKey
-}
+export type Bindings = Omit<Env, 'ADMIN_APIKEYS'> & { ADMIN_APIKEYS?: string }
+export type Variables = { apiKey: ApiKey; models: ModelConfig[] }
+export type HonoEnv = { Bindings: Bindings; Variables: Variables }

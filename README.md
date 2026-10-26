@@ -1,70 +1,128 @@
 # 文鳐
 
-文鳐（Wen Yao）是一款高性能、功能丰富的 OpenAI API 代理和负载均衡器，专为企业级大语言模型（LLM）应用设计。它提供先进的流量管理、可观测性和可靠性特性。
+文鳐（Wenyao）是一个 OpenAI / AWS Bedrock 的 LLM 代理和负载均衡器，只运行在 Cloudflare Workers 上。Hono 提供代理和管理 API，D1 保存配置、分钟指标、会话亲和及录制元数据，R2 保存录制的请求体和响应体，Durable Objects 的内置 SQLite 保存受限后端的并发名额。React Router SPA 与 API 由同一个 Worker 托管。
 
-## 🚀 核心特性
+支持 `weighted`、`lowest-ttft` 和 `min-error-rate` 三种负载均衡策略、失败回退、TTFT 超时、会话亲和、全局后端并发限制、请求与响应录制和 Prometheus 指标。管理面板的路由为 `/`、`/apikeys`、`/affinity`、`/stats`、`/metrics`。
 
-- **多策略负载均衡**:
-  - `weighted`: 根据后端权重分配流量。
-  - `lowest-ttft`: 将请求路由到首字响应时间（TTFT）最低的后端。
-  - `min-error-rate`: 自动优先选择稳定性更高的后端。
-- **会话粘滞 (Session Affinity)**: 支持将特定的用户会话映射到同一个后端，以确保一致的性能体验。
-- **并发控制**: 使用 MongoDB 或 Redis 实现分布式并发限制。
-- **可观测性**: 实时指标采集，使用 MongoDB Time Series 存储。
-- **管理面板**: 基于 React 的现代化仪表盘，用于管理模型、后端和 API 密钥。
-- **安全设计**: 所有管理接口内置 API Key 鉴权。
-- **灵活部署**: 支持本地运行和 Docker 容器化部署。
+产品定义和存储结构见 [Workers 架构设计](docs/cloudflare-workers.md)。
 
-## 🏗 项目架构
+## 运行要求
 
-项目主要分为两个部分：
+- Cloudflare Workers **Paid** 计划，以及 D1、R2、Durable Objects。
+- 上游 LLM 服务必须能从公网访问。
+- Node.js 22 或更高版本和 npm，仅用于安装、构建、测试和运行开发工具。
+- Durable Objects 仅用于并发限制，不使用 KV、Analytics Engine 或 Queues。
 
-1.  **后端 (根目录)**: 基于 [Hono](https://hono.dev/) 和 Node.js。负责请求转发、负载均衡以及管理接口。
-2.  **前端 (`/pages`)**: 一个 [React Router](https://reactrouter.com/) 应用程序，提供可视化管理界面。
+## 部署
 
-## 🛠 快速上手
-
-### 环境要求
-
-- Node.js (v18+)
-- MongoDB (可选，用于存储指标和持久化配置)
-- Redis (可选，用于高性能分布式并发限制)
-
-### 安装
+安装依赖并创建 Cloudflare 资源：
 
 ```bash
-npm install
-cd pages && npm install
+npm ci
+npm --prefix pages ci
+npx wrangler login
+npx wrangler d1 create wenyao
+npx wrangler r2 bucket create wenyao-recordings
 ```
 
-### 配置
+将创建 D1 时返回的 `database_id` 填入 `wrangler.jsonc` 的 `DB` 绑定。`RECORDINGS` 默认绑定 `wenyao-recordings`，也可改为自己的桶名。
 
-复制 `.env.example`（如果有）或在根目录创建 `.env` 文件：
-
-```env
-MONGODB_URL=mongodb://localhost:27017/wenyao
-ADMIN_APIKEYS=your-secret-key
-ENABLE_METRICS=true
-ACTIVE_REQUEST_STORE_TYPE=mongodb # 或 redis
-REDIS_URL=redis://localhost:6379
-```
-
-### 运行项目
-
-#### 开发模式
-
-同时启动后端和前端：
+应用数据库迁移、设置管理密钥并发布：
 
 ```bash
+npm run db:migrate:remote
+npx wrangler secret put ADMIN_APIKEYS
+npm run build
+npx wrangler deploy
+```
+
+`ADMIN_APIKEYS` 是逗号分隔的管理 key。管理 API 使用 `Authorization: Bearer <key>`，未配置时返回 503，key 缺失或无效时返回 401。首次部署后通过管理面板创建模型、后端和代理 API key，代理请求使用单独的代理 key。
+
+`npm run deploy` 等价于构建前端后发布。CI 只执行本地检查和 `wrangler deploy --dry-run`，不会自动部署。D1、R2、静态资源 `ASSETS`、Durable Object `CONCURRENCY`（`BackendConcurrency` 类）和每 5 分钟执行一次的 Cron 已在 `wrangler.jsonc` 配置。DO 的 SQLite migration 随 Worker 部署应用，无需单独创建实例。
+
+## 本地开发
+
+```bash
+npm ci
+npm --prefix pages ci
+cp .dev.vars.example .dev.vars
+# 编辑 .dev.vars，设置 ADMIN_APIKEYS
+npm run db:migrate:local
+npm run build
 npm run dev:all
 ```
 
-#### 生产模式
+Worker 默认运行在 `http://localhost:8787`，前端开发服务器在终端显示地址，并将 `/admin` 请求代理到 8787。只需运行已构建的 SPA 和 Worker 时，使用 `npm run dev`。本地 D1、R2 和 DO 由 Wrangler / Miniflare 提供，数据保存在 `.wrangler/`。本地 secret 使用 `.dev.vars`。
+
+检查示例：
 
 ```bash
-# 构建前端
-cd pages && npm run build
-# 构建并启动后端（会同时托管构建出的前端文件）
-npm run build
-npm start
+curl http://localhost:8787/health
+curl -H 'Authorization: Bearer <管理key>' http://localhost:8787/admin/models
 ```
+
+验证命令：
+
+```bash
+npm run typecheck
+npm run lint:check
+npm test
+npm --prefix pages run typecheck
+npm --prefix pages run build
+npx wrangler deploy --dry-run
+```
+
+测试通过 `@cloudflare/vitest-plugin` 在本地 Workers 运行时执行，自动应用 `migrations/`，D1 / R2 / DO 和上游 mock 均在本地，不需要外部数据库。修改 Wrangler 绑定后运行 `npm run types` 更新生成的运行时类型。
+
+## 从 MongoDB 迁移配置
+
+一次性导出脚本只读取旧库的 `models` 和 `apikeys`，不迁移指标、亲和映射或录制数据。旧库的连接字符串需要包含数据库名；`createdAt`、`lastUsedAt` 会保留为毫秒时间戳。
+
+```bash
+MONGODB_URL='mongodb://localhost:27017/wenyao' npm run migrate:mongodb -- wenyao.migration.sql
+```
+
+脚本生成可重复导入的 `INSERT OR REPLACE` SQL。字符串中的引号、换行、Unicode 和 NUL 都会被保留。较大记录通过辅助分片表重建，每条 SQL 小于 100 KB，导入结束后删除辅助表；D1 单行仍受 2 MB 上限约束。生成过程中失败不会留下新的部分 SQL 文件。导出文件含后端凭据和 API key，应按密钥文件保存。
+
+先应用 schema，再导入 SQL。可先在本地检查：
+
+```bash
+npm run db:migrate:local
+npx wrangler d1 execute wenyao --local --file=wenyao.migration.sql
+```
+
+确认导出内容后，将同一文件导入已创建的远程 D1：
+
+```bash
+npm run db:migrate:remote
+npx wrangler d1 execute wenyao --remote --file=wenyao.migration.sql
+```
+
+`INSERT OR REPLACE` 会以旧库导出值覆盖同名模型或同 key 的配置。迁移完成后，运行服务只使用 Workers 的 D1、R2 和 DO；MongoDB 驱动仅作为一次性迁移工具的开发依赖。
+
+## 请求重放
+
+重放工具通过管理 API 拉取录制数据，需要管理 key 和代理 key。默认管理 API 与目标地址同源；`ADMIN_URL` 可以指定独立的管理服务地址。
+
+```bash
+ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
+  npm run replay -- http://localhost:8787/v1/chat/completions [backend_id] [limit] [concurrency]
+```
+
+参数默认值依次为目标地址 `http://localhost:8787/v1/chat/completions`、不筛选后端、10 条、并发 1。工具会分页读取录制数据，并等待流式响应消费完毕后再计算完成时间、释放重放并发名额。
+
+## 限制与行为
+
+- 配置和代理 API key 在每个 isolate 内缓存 10 秒；其他 isolate 最多 10 秒后看到变更。管理 API 直接读写 D1，写入后立即使当前 isolate 的配置缓存失效。
+- `ADMIN_APIKEYS` 必须配置。代理 key 缺失或无效返回 401，无权访问模型返回 403。代理 key 的 `lastUsedAt` 在同一 isolate 内最多每 60 秒写入一次。
+- 指标始终开启，按分钟汇总，保存 30 天。查询包含与时间窗口相交的分钟桶，因此不足一分钟的窗口仍可能包含整分钟的计数；TTFT 按流式、非流式分别使用 `sum / count`。负载均衡统计缓存 15 秒。
+- 只有配置了 `maxConcurrentRequests > 0` 的后端才使用并发限制，每个后端一个 DO。每次尝试通过 `acquire`、`release` 两次 RPC 抢占和释放名额；DO 使用内置 SQLite 持久化，休眠或重启不会丢失计数，超过 30 分钟的名额在 `acquire` / `count` 时清理。DO 调用异常时记录日志并放行。长于 30 分钟的请求不再占用有效并发名额。
+- 未配置并发限制的后端不访问 DO，也不记录活跃请求；`/admin/active-requests` 和 Prometheus 的 `llm_proxy_active_requests` 只列出已启用且配置了限制的后端，计数来自对应 DO。
+- 会话亲和在最后一次成功访问 1 小时后过期，管理端查询不增加访问次数；清除映射立即生效。不存在、禁用或权重为 0 的后端映射会被忽略并删除。
+- 后端可独立配置 `recordResponses`，仅在 `recordRequests` 同时开启时生效。管理列表和单条读取新增 `response`：未录制时为 `null`；已录制时包含状态、原始响应头、响应体、编码、错误、截断标记和完成时间。文本类型使用 UTF-8，其余使用 base64。每条响应体最多保存 10 MiB，客户端仍接收完整响应；流中断保存已收到的部分，超时和网络错误只保存错误信息。失败并触发回退的尝试也会录制。
+- 模型和后端配置写入使用比较并交换，冲突最多尝试 3 次，仍冲突返回 409；管理写入成功后失效当前 isolate 的配置缓存。
+- 非流式 2xx 响应会校验 JSON，非法 JSON 按失败计数并尝试下一个后端；合法 JSON 原始字节透传。
+- Cron 每 5 分钟清理过期的亲和映射和分钟指标。录制数据不会自动过期，删除录制时同时删除 D1 元数据及 R2 中的请求体、响应体。
+- 不再提供 `/admin/instances` 或 `/admin/instances/:instanceId/stats`，历史指标不再包含 `instanceId` 参数或字段；`/health` 不再返回 `instanceId`、`metricsEnabled`。
+- 管理业务错误统一为 JSON `{ "error": "..." }`：不存在为 404，已存在为 409，provider 不匹配为 400。其余保留接口的路径和响应形状不变，录制数据仍返回 `_id` 和 `body`。
+- 运行配置只使用 Workers bindings 和 `ADMIN_APIKEYS`。原来的数据库连接、指标开关、实例 ID、端口等环境变量已删除。

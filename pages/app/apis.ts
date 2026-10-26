@@ -22,7 +22,8 @@ export type BackendConfig = {
   model?: string; // Optional: Override the model name when forwarding to this backend
   streamingTTFTTimeout?: number; // Optional: TTFT timeout in milliseconds for streaming requests
   nonStreamingTTFTTimeout?: number; // Optional: TTFT timeout in milliseconds for non-streaming requests
-  recordRequests?: boolean; // Optional: Record all requests (URL, headers, body) to MongoDB
+  recordRequests?: boolean; // Optional: Record all requests (URL, headers, body) to D1 and R2
+  recordResponses?: boolean; // Optional: Record responses when request recording is enabled
   maxConcurrentRequests?: number; // Optional: Maximum concurrent requests (undefined/0 = no limit, >0 = specific limit)
   openaiConfig?: OpenAIConfig;
   bedrockConfig?: BedrockConfig;
@@ -56,7 +57,6 @@ export type BackendStats = {
 };
 
 export type StatsDataPoint = {
-  instanceId: string; // Instance unique identifier
   backendId: string;
   timestamp: string | Date;
   totalRequests: number;
@@ -92,6 +92,15 @@ export type RecordedRequest = {
   url: string;
   headers: Record<string, string>;
   body: string;
+  response: {
+    status: number | null;
+    headers: Record<string, string> | null;
+    body: string;
+    bodyEncoding: 'utf8' | 'base64';
+    error: string | null;
+    truncated: boolean;
+    completedAt: string;
+  } | null;
 };
 
 export type AffinityMapping = {
@@ -159,7 +168,7 @@ export function useAdminApi() {
       const data = await res.json();
       return data.model;
     },
-    async updateModel(model: string, updates: { loadBalancingStrategy?: LoadBalancingStrategy; backends?: BackendConfig[]; minErrorRateOptions?: MinErrorRateOptions }): Promise<ModelConfig> {
+    async updateModel(model: string, updates: { loadBalancingStrategy?: LoadBalancingStrategy; backends?: BackendConfig[]; minErrorRateOptions?: MinErrorRateOptions; enableAffinity?: boolean }): Promise<ModelConfig> {
       const res = await fetch(`${base}/models/${encodeURIComponent(model)}`, {
         method: "PUT",
         headers: createAuthHeaders({ "Content-Type": "application/json" }),
@@ -238,7 +247,7 @@ export function useAdminApi() {
       return await res.text();
     },
 
-    // Historical stats operations (near-realtime aggregated from MongoDB)
+    // Historical stats operations (near-realtime aggregated from D1)
     async getHistoricalStats(backendId: string, startTime?: Date, endTime?: Date): Promise<HistoricalStatsResponse> {
       const params = new URLSearchParams();
       if (startTime) params.append('startTime', startTime.toISOString());

@@ -32,6 +32,7 @@ export function AddBackendDialog({ open, onOpenChange, model, provider, onAdded 
       streamingTTFTTimeout: 0,
       nonStreamingTTFTTimeout: 0,
       recordRequests: false,
+      recordResponses: false,
       maxConcurrentRequests: 0,
       [providerConfig.configField]: createDefaultProviderConfig(prov),
     } as BackendConfig;
@@ -203,25 +204,37 @@ export function AddBackendDialog({ open, onOpenChange, model, provider, onAdded 
             </div>
           </div>
 
-          {/* Request Recording Section */}
+          {/* Request and Response Recording Section */}
           <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
-            <h4 className="text-sm font-medium text-gray-700">请求记录 (可选)</h4>
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <label className="block text-sm mb-1" htmlFor="record-requests-add">
+            <h4 className="text-sm font-medium text-gray-700">请求与响应记录 (可选)</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-sm" htmlFor="record-requests-add">
                   记录所有请求
                 </label>
-                <p className="text-xs text-gray-500">
-                  启用后将记录所有发往此 backend 的请求（URL、Headers、Body）。响应不会被记录。
-                </p>
+                <Switch
+                  id="record-requests-add"
+                  size="md"
+                  checked={form.recordRequests || false}
+                  onCheckedChange={(v) => setForm({ ...form, recordRequests: v })}
+                />
               </div>
-              <Switch
-                id="record-requests-add"
-                size="md"
-                checked={form.recordRequests || false}
-                onCheckedChange={(v) => setForm({ ...form, recordRequests: v })}
-              />
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-sm" htmlFor="record-responses-add">
+                  记录所有响应
+                </label>
+                <Switch
+                  id="record-responses-add"
+                  size="md"
+                  checked={form.recordResponses || false}
+                  disabled={!form.recordRequests}
+                  onCheckedChange={(v) => setForm({ ...form, recordResponses: v })}
+                />
+              </div>
             </div>
+            <p className="text-xs text-gray-500">
+              启用后将记录所有发往此 backend 的请求（URL、Headers、Body）。响应记录需要先启用请求记录，每条响应体最多保留 10 MiB。
+            </p>
           </div>
 
           {/* Concurrency Limit Section */}

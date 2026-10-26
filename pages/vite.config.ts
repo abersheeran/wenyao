@@ -10,7 +10,7 @@ export default defineConfig({
     proxy: {
       // Proxy admin API to backend during dev to avoid CORS
       "/admin": {
-        target: "http://localhost:51818",
+        target: "http://localhost:8787",
         changeOrigin: true,
       },
     },

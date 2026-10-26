@@ -69,6 +69,14 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
     [api, load]
   );
 
+  const [updateRecordResponsesState, updateRecordResponses] = useAsyncFn(
+    async (model: string, backendId: string, recordResponses: boolean) => {
+      await api.updateBackend(model, backendId, { recordResponses });
+      await load();
+    },
+    [api, load]
+  );
+
   const [deleteBackendState, deleteBackend] = useAsyncFn(
     async (model: string, backendId: string) => {
       await api.deleteBackend(model, backendId);
@@ -106,9 +114,9 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
         <h2 className="text-xl font-semibold">Models & Backends</h2>
         <Button onClick={() => setAddModelOpen(true)}>Add Model</Button>
       </div>
-      {(listState.error || deleteModelState.error || updateEnabledState.error || updateRecordRequestsState.error || deleteBackendState.error) && (
+      {(listState.error || deleteModelState.error || updateEnabledState.error || updateRecordRequestsState.error || updateRecordResponsesState.error || deleteBackendState.error) && (
         <p className="text-sm text-red-600 mb-2">
-          {(listState.error || deleteModelState.error || updateEnabledState.error || updateRecordRequestsState.error || deleteBackendState.error)?.message}
+          {(listState.error || deleteModelState.error || updateEnabledState.error || updateRecordRequestsState.error || updateRecordResponsesState.error || deleteBackendState.error)?.message}
         </p>
       )}
       {models.length === 0 ? (
@@ -176,6 +184,7 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                             <TableHead>Max Concurrency</TableHead>
                             <TableHead>TTFT Timeout</TableHead>
                             <TableHead>Record Requests</TableHead>
+                            <TableHead>Record Responses</TableHead>
                             <TableHead>Enabled</TableHead>
                             <TableHead>Actions</TableHead>
                           </TableRow>
@@ -216,8 +225,17 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                                 </TableCell>
                                 <TableCell>
                                   <Switch
+                                    aria-label={`Record requests for ${backend.id}`}
                                     checked={backend.recordRequests ?? false}
                                     onCheckedChange={(checked) => updateRecordRequests(modelConfig.model, backend.id, checked)}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <Switch
+                                    aria-label={`Record responses for ${backend.id}`}
+                                    checked={backend.recordResponses ?? false}
+                                    disabled={!backend.recordRequests}
+                                    onCheckedChange={(checked) => updateRecordResponses(modelConfig.model, backend.id, checked)}
                                   />
                                 </TableCell>
                                 <TableCell>

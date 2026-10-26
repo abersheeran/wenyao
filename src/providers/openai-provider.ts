@@ -1,70 +1,74 @@
-/**
- * OpenAI provider implementation
- * Handles OpenAI-compatible API format
- */
-
 import { BaseProvider } from './base-provider.js'
 
 import type { StandardizedRequest } from './base-provider.js'
 import type { BackendConfig } from '../types/backend.js'
 import type { Context } from 'hono'
 
-/**
- * OpenAI provider for handling OpenAI-compatible APIs
- */
 export class OpenAIProvider extends BaseProvider {
   readonly name = 'openai'
 
-  validateRequest(_c: Context, requestBody: any): void {
-    if (!requestBody.model) {
+  validateRequest(_c: Context, body: Record<string, unknown>): void {
+    if (typeof body.model !== 'string' || !body.model)
       throw new Error('Model is required in the request')
-    }
   }
 
-  parseRequest(c: Context, requestBody: any): StandardizedRequest {
+  parseRequest(c: Context, body: Record<string, unknown>): StandardizedRequest {
     return {
-      model: requestBody.model,
-      stream: requestBody.stream ?? false,
+      model: body.model as string,
+      stream: body.stream === true,
       originalHeaders: c.req.header(),
-      originalBody: requestBody,
+      originalBody: body,
     }
   }
 
   async prepareHeaders(
     backend: BackendConfig,
-    stream: boolean,
-    url: string,
+    _stream: boolean,
+    _url: string,
     headers: Record<string, string>,
-    requestBody: string
+    _body: string
   ): Promise<Record<string, string>> {
-    if (!backend.openaiConfig) {
-      throw new Error('OpenAI configuration is missing for this backend')
+    if (!backend.openaiConfig) throw new Error('OpenAI configuration is missing for this backend')
+    const result: Record<string, string> = {}
+    const blocked = new Set([
+      'host',
+      'content-length',
+      'authorization',
+      'x-authorization',
+      'x-real-ip',
+      'cdn-loop',
+      'connection',
+      'keep-alive',
+      'transfer-encoding',
+      'upgrade',
+      'te',
+      'trailer',
+      'proxy-authorization',
+      'proxy-authenticate',
+    ])
+    for (const [name, value] of Object.entries(headers)) {
+      if (name.toLowerCase() === 'connection')
+        for (const field of value.split(',')) blocked.add(field.trim().toLowerCase())
     }
-
-    const newHeaders = { ...headers }
-    // Remove client headers that shouldn't be forwarded
-    delete newHeaders['content-length']
-    delete newHeaders['authorization']
-    delete newHeaders['x-authorization']
-
-    // Set backend's API key
-    newHeaders['Authorization'] = `Bearer ${backend.openaiConfig.apiKey}`
-
-    return newHeaders
+    for (const [name, value] of Object.entries(headers)) {
+      const lower = name.toLowerCase()
+      if (!blocked.has(lower) && !lower.startsWith('cf-') && !lower.startsWith('x-forwarded-'))
+        result[lower] = value
+    }
+    result.authorization = `Bearer ${backend.openaiConfig.apiKey}`
+    result['content-type'] = 'application/json'
+    return result
   }
 
-  prepareRequestBody(standardizedRequest: StandardizedRequest, backend: BackendConfig): any {
-    // Use backend-specific model if configured, otherwise use original
-    return {
-      ...standardizedRequest.originalBody,
-      model: backend.model || standardizedRequest.model,
-    }
+  prepareRequestBody(
+    request: StandardizedRequest,
+    backend: BackendConfig
+  ): Record<string, unknown> {
+    return { ...request.originalBody, model: backend.model || request.model }
   }
 
-  getTargetUrl(backend: BackendConfig, _standardizedRequest: StandardizedRequest): string {
-    if (!backend.openaiConfig) {
-      throw new Error('OpenAI configuration is missing for this backend')
-    }
+  getTargetUrl(backend: BackendConfig, _request: StandardizedRequest): string {
+    if (!backend.openaiConfig) throw new Error('OpenAI configuration is missing for this backend')
     return new URL('v1/chat/completions', backend.openaiConfig.url).toString()
   }
 }

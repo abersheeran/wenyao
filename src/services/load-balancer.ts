@@ -1,8 +1,6 @@
-import { affinityManager } from './affinity-manager.js'
-import { configManager, type ConfigManager } from './config-manager.js'
+import { type DbMetricsCollector, emptyStats } from './metrics/db-collector.js'
 
-import type { BackendConfig, LoadBalancingStrategy, ModelConfig } from '../types/backend.js'
-import type { MetricsCollector } from './metrics/index.js'
+import type { BackendConfig, ModelConfig } from '../types/backend.js'
 
 /**
  * Load Balancer
@@ -13,56 +11,33 @@ import type { MetricsCollector } from './metrics/index.js'
  * - Lowest TTFT (Time-To-First-Token)
  * - Minimum Error Rate
  *
- * Also handles forced backend selection via headers and session affinity.
+ * Handles forced backend selection; the proxy resolves session affinity first.
  */
 export class LoadBalancer {
-  private configManager: ConfigManager
-  private metricsCollector: MetricsCollector | null
-
-  constructor(configMgr?: ConfigManager, metricsCollector?: MetricsCollector) {
-    this.configManager = configMgr || configManager
-    this.metricsCollector = metricsCollector || null
-  }
-
-  /**
-   * Updates the metrics collector instance.
-   * Required for metrics-based strategies (lowest-ttft, min-error-rate).
-   */
-  setMetricsCollector(metricsCollector: MetricsCollector): void {
-    this.metricsCollector = metricsCollector
-  }
+  constructor(private metricsCollector: DbMetricsCollector) {}
 
   /**
    * Selects a backend for a specific model request.
    *
    * Precedence:
    * 1. Forced backend (via X-Backend-ID header).
-   * 2. Session affinity (if enabled for the model and session ID provided).
-   * 3. Configured load balancing strategy.
+   * 2. Configured load balancing strategy.
    *
-   * @param model - The target model name
+   * @param modelConfig - The cached model configuration
    * @param forceBackendId - Optional ID to override selection
    * @param isStream - Whether the request is streaming
-   * @param sessionId - Optional session ID for affinity
    * @returns Selected backend or null if no healthy backends are available.
    */
   async selectBackend(
-    model: string,
+    modelConfig: ModelConfig,
     forceBackendId?: string,
-    isStream?: boolean,
-    sessionId?: string
+    isStream?: boolean
   ): Promise<BackendConfig | null> {
-    const modelConfig = this.configManager.getModelConfig(model)
-
-    if (!modelConfig) {
-      throw new Error(`Model configuration for ${model} not found`)
-    }
-
     // Priority 1: Force backend via X-Backend-ID header
     if (forceBackendId) {
-      const backend = this.configManager.getBackend(model, forceBackendId)
+      const backend = modelConfig.backends.find((item) => item.id === forceBackendId)
       if (!backend) {
-        throw new Error(`Backend with id ${forceBackendId} not found in model ${model}`)
+        throw new Error(`Backend with id ${forceBackendId} not found in model ${modelConfig.model}`)
       }
       if (!backend.enabled) {
         throw new Error(`Backend with id ${forceBackendId} is disabled`)
@@ -70,22 +45,9 @@ export class LoadBalancer {
       return backend
     }
 
-    // Priority 2: Check affinity if enabled and sessionId provided
-    if (modelConfig.enableAffinity && sessionId) {
-      const affinityBackend = await affinityManager.getAffinityBackend(
-        model,
-        sessionId,
-        this.configManager
-      )
-      if (affinityBackend) {
-        console.log(`Using affinity backend ${affinityBackend.id} for session ${sessionId}`)
-        return affinityBackend
-      }
-    }
-
-    // Priority 3: Standard load balancing
-    // Get backends for selection (excluding weight=0 backends)
-    const backendsForSelection = this.configManager.getBackendsForSelection(model)
+    const backendsForSelection = modelConfig.backends.filter(
+      (backend) => backend.enabled && backend.weight > 0
+    )
 
     if (backendsForSelection.length === 0) {
       return null
@@ -165,13 +127,6 @@ export class LoadBalancer {
     backends: BackendConfig[],
     isStream?: boolean
   ): Promise<BackendConfig> {
-    // Check if metrics are available
-    if (!this.metricsCollector || !this.metricsCollector.isEnabled()) {
-      throw new Error(
-        "Strategy 'lowest-ttft' requires metrics to be enabled. Set ENABLE_METRICS=true or use another strategy."
-      )
-    }
-
     // Filter out backends with weight=0
     const eligibleBackends = backends.filter((b) => b.weight > 0)
 
@@ -182,18 +137,11 @@ export class LoadBalancer {
     // Treat undefined isStream as false (non-streaming)
     const useStreaming = isStream === true
 
-    // Get recent stats for all eligible backends (15 minute window)
-    const backendStatsPromises = eligibleBackends.map(async (backend) => {
-      const stats = await this.metricsCollector!.getRecentStats(backend.id, 15 * 60 * 1000) // 15 minutes in ms
-
-      return {
-        backend,
-        stats,
-        hasData: stats.totalRequests > 0,
-      }
+    const statsMap = await this.metricsCollector.getRecentStatsMap(15 * 60 * 1000)
+    const backendStats = eligibleBackends.map((backend) => {
+      const stats = statsMap.get(backend.id) ?? emptyStats(backend.id)
+      return { backend, stats, hasData: stats.totalRequests > 0 }
     })
-
-    const backendStats = await Promise.all(backendStatsPromises)
 
     // Calculate average TTFT for cold start protection
     const backendsWithData = backendStats.filter((s) => s.hasData)
@@ -245,13 +193,6 @@ export class LoadBalancer {
     backends: BackendConfig[],
     modelConfig: ModelConfig
   ): Promise<BackendConfig> {
-    // Check if metrics are available
-    if (!this.metricsCollector || !this.metricsCollector.isEnabled()) {
-      throw new Error(
-        "Strategy 'min-error-rate' requires metrics to be enabled. Set ENABLE_METRICS=true or use another strategy."
-      )
-    }
-
     // Filter out backends with weight=0
     const eligibleBackends = backends.filter((b) => b.weight > 0)
 
@@ -266,20 +207,15 @@ export class LoadBalancer {
     const EPSILON = options.epsilon ?? 0.001
     const TIME_WINDOW_MINUTES = options.timeWindowMinutes ?? 15
 
-    // Get time-windowed stats for all eligible backends
-    const backendStatsPromises = eligibleBackends.map(async (backend) => {
-      const stats = await this.metricsCollector!.getRecentStats(
-        backend.id,
-        TIME_WINDOW_MINUTES * 60 * 1000
-      ) // Convert to ms
+    const statsMap = await this.metricsCollector.getRecentStatsMap(TIME_WINDOW_MINUTES * 60 * 1000)
+    const backendStats = eligibleBackends.map((backend) => {
+      const stats = statsMap.get(backend.id) ?? emptyStats(backend.id)
       return {
         backend,
-        errorRate: 1 - stats.successRate, // Error rate = 1 - success rate
+        errorRate: 1 - stats.successRate,
         totalRequests: stats.totalRequests,
       }
     })
-
-    const backendStats = await Promise.all(backendStatsPromises)
 
     // Calculate average error rate for cold start protection
     const backendsWithData = backendStats.filter((s) => s.totalRequests >= MIN_REQUESTS)
@@ -346,6 +282,3 @@ export class LoadBalancer {
     return weightsWithErrorRate[weightsWithErrorRate.length - 1].backend
   }
 }
-
-// Singleton instance
-export const loadBalancer = new LoadBalancer()

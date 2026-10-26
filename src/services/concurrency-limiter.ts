@@ -1,87 +1,32 @@
 import type { BackendConfig } from '../types/backend.js'
-import type { ActiveRequestStore } from './active-requests/interface.js'
 
-/**
- * ConcurrencyLimiter service for tracking and enforcing per-backend concurrent request limits
- * Integrates with ActiveRequestStore to get real-time active request counts
- * Supports multi-instance environments via pluggable storage backends (MongoDB, Redis)
- */
 export class ConcurrencyLimiter {
-  private store: ActiveRequestStore | null = null
+  constructor(private readonly namespace: Env['CONCURRENCY']) {}
 
-  /**
-   * Initialize the limiter with an active request store
-   */
-  initialize(store: ActiveRequestStore): void {
-    this.store = store
-  }
-
-  /**
-   * Check if metrics/active request tracking is enabled
-   */
-  isEnabled(): boolean {
-    return this.store !== null
-  }
-
-  /**
-   * Try to acquire a concurrency slot for a backend
-   * Returns true if acquired (under limit), false if at/over capacity
-   */
-  async tryAcquire(backend: BackendConfig, requestId: string): Promise<boolean> {
-    if (!this.store) {
-      return true // No tracking - always allow
-    }
-
+  async tryAcquire(backend: BackendConfig, slotId: string): Promise<boolean> {
+    if (!backend.maxConcurrentRequests || backend.maxConcurrentRequests <= 0) return true
     try {
-      return await this.store.tryRecordStart(backend.id, requestId, backend.maxConcurrentRequests)
+      return await this.stub(backend.id).acquire(slotId, backend.maxConcurrentRequests)
     } catch (error) {
-      console.error(`[ConcurrencyLimiter] Error trying to acquire slot for ${backend.id}:`, error)
-      return true // Fail open on storage errors
+      console.error(`Failed to acquire concurrency slot for ${backend.id}:`, error)
+      return true
     }
   }
 
-  /**
-   * Record a request start without capacity check
-   */
-  async recordStart(backendId: string, requestId: string): Promise<void> {
-    if (!this.store) return
-    await this.store.recordStart(backendId, requestId)
-  }
-
-  /**
-   * Release a concurrency slot
-   */
-  async release(backendId: string, requestId: string): Promise<void> {
-    if (!this.store) return
+  async release(backendId: string, slotId: string): Promise<void> {
     try {
-      await this.store.recordComplete(backendId, requestId)
+      await this.stub(backendId).release(slotId)
     } catch (error) {
-      console.error(`[ConcurrencyLimiter] Error releasing slot for ${backendId}:`, error)
+      console.error(`Failed to release concurrency slot for ${backendId}:`, error)
     }
   }
 
-  /**
-   * Get current active request count for a backend
-   * Returns 0 if disabled
-   */
-  async getActiveRequestCount(backendId: string): Promise<number> {
-    if (!this.store) {
-      return 0
-    }
-    return await this.store.getCount(backendId)
+  async getCount(backendId: string): Promise<number> {
+    return this.stub(backendId).count()
   }
 
-  /**
-   * Get current active request counts for all backends
-   * Returns empty object if disabled
-   */
-  async getAllActiveRequestCounts(): Promise<Record<string, number>> {
-    if (!this.store) {
-      return {}
-    }
-    return await this.store.getAllCounts()
+  private stub(backendId: string) {
+    // This service is request-scoped. Never retain a stub across requests.
+    return this.namespace.get(this.namespace.idFromName(backendId))
   }
 }
-
-// Singleton instance
-export const concurrencyLimiter = new ConcurrencyLimiter()

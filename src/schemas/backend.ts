@@ -57,6 +57,7 @@ export const backendConfigSchema = z
       .nonnegative('Non-streaming TTFT timeout must be non-negative')
       .optional(),
     recordRequests: z.boolean().default(false).optional(),
+    recordResponses: z.boolean().default(false).optional(),
     maxConcurrentRequests: z
       .number()
       .int()
@@ -77,27 +78,13 @@ export const backendConfigSchema = z
   )
 
 // Schema for creating a new model configuration
-export const createModelConfigSchema = z
-  .object({
-    model: z.string().min(1, 'Model name is required'),
-    provider: providerTypeSchema,
-    backends: z.array(backendConfigSchema).default([]), // Allow empty backends array
-    loadBalancingStrategy: loadBalancingStrategySchema.default('weighted'),
-    enableAffinity: z.boolean().default(false).optional(),
-  })
-  .refine(
-    (data) => {
-      // Ensure all backends use the same provider as the model
-      if (data.backends.length > 0) {
-        const modelProvider = data.provider
-        return data.backends.every((backend) => backend.provider === modelProvider)
-      }
-      return true
-    },
-    {
-      message: 'All backends must use the same provider as the model',
-    }
-  )
+export const createModelConfigSchema = z.object({
+  model: z.string().min(1, 'Model name is required'),
+  provider: providerTypeSchema,
+  backends: z.array(backendConfigSchema).default([]), // Allow empty backends array
+  loadBalancingStrategy: loadBalancingStrategySchema.default('weighted'),
+  enableAffinity: z.boolean().default(false).optional(),
+}) // Cross-provider validation is a business error handled by ConfigManager.
 
 // Schema for updating a model configuration - all fields are optional
 export const updateModelConfigSchema = z
@@ -129,6 +116,7 @@ export const updateBackendInModelSchema = z
       .nonnegative('Non-streaming TTFT timeout must be non-negative')
       .optional(),
     recordRequests: z.boolean().optional(),
+    recordResponses: z.boolean().optional(),
     maxConcurrentRequests: z
       .number()
       .int()

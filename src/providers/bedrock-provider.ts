@@ -1,11 +1,4 @@
-/**
- * AWS Bedrock provider implementation
- * Handles AWS Bedrock Claude API format with AWS Signature V4
- */
-
-import { Sha256 } from '@aws-crypto/sha256-js'
-import { HttpRequest } from '@aws-sdk/protocol-http'
-import { SignatureV4 } from '@aws-sdk/signature-v4'
+import { AwsV4Signer } from 'aws4fetch'
 
 import { BaseProvider } from './base-provider.js'
 
@@ -13,39 +6,22 @@ import type { StandardizedRequest } from './base-provider.js'
 import type { BackendConfig } from '../types/backend.js'
 import type { Context } from 'hono'
 
-/**
- * Bedrock provider for handling AWS Bedrock Claude API
- */
 export class BedrockProvider extends BaseProvider {
   readonly name = 'bedrock'
 
-  validateRequest(_c: Context, requestBody: any): void {
-    if (!requestBody.messages || !Array.isArray(requestBody.messages)) {
-      throw new Error('Messages array is required in the request')
-    }
-    if (requestBody.messages.length === 0) {
-      throw new Error('Messages array cannot be empty')
-    }
+  validateRequest(_c: Context, body: Record<string, unknown>): void {
+    if (!Array.isArray(body.messages) || body.messages.length === 0)
+      throw new Error('Messages array is required and cannot be empty')
   }
 
-  parseRequest(c: Context, requestBody: any): StandardizedRequest {
-    // Extract model from URL path parameter
-    // Bedrock format: /model/{model-id}/invoke or /model/{model-id}/invoke-with-response-stream
+  parseRequest(c: Context, body: Record<string, unknown>): StandardizedRequest {
     const model = c.req.param('modelId')
-
-    if (!model) {
-      throw new Error('Model ID not found in URL path')
-    }
-
-    // Determine if streaming based on URL endpoint
-    const url = new URL(c.req.url)
-    const isStreaming = url.pathname.includes('/invoke-with-response-stream')
-
+    if (!model) throw new Error('Model ID not found in URL path')
     return {
       model,
-      stream: isStreaming,
+      stream: new URL(c.req.url).pathname.endsWith('/invoke-with-response-stream'),
       originalHeaders: c.req.header(),
-      originalBody: requestBody,
+      originalBody: body,
     }
   }
 
@@ -53,90 +29,46 @@ export class BedrockProvider extends BaseProvider {
     backend: BackendConfig,
     stream: boolean,
     url: string,
-    headers: Record<string, string>,
-    requestBody: string
+    _headers: Record<string, string>,
+    body: string
   ): Promise<Record<string, string>> {
-    if (!backend.bedrockConfig) {
-      throw new Error('Bedrock configuration is missing for this backend')
-    }
-
-    const urlObj = new URL(url)
-
-    // Create AWS credentials
-    const credentials = {
-      accessKeyId: backend.bedrockConfig.accessKeyId,
-      secretAccessKey: backend.bedrockConfig.secretAccessKey,
-    }
-
-    // Create HTTP request for signing
-    const httpRequest = new HttpRequest({
+    if (!backend.bedrockConfig) throw new Error('Bedrock configuration is missing for this backend')
+    const signer = new AwsV4Signer({
+      ...backend.bedrockConfig,
+      service: 'bedrock',
       method: 'POST',
-      protocol: urlObj.protocol,
-      hostname: urlObj.hostname,
-      path: urlObj.pathname,
+      url,
+      body,
+      allHeaders: true,
       headers: {
         'content-type': 'application/json',
         accept: stream ? 'application/vnd.amazon.eventstream' : 'application/json',
-        host: urlObj.hostname,
+        'x-amz-content-sha256': await sha256(body),
       },
-      body: requestBody,
     })
-
-    // Create signer
-    const signer = new SignatureV4({
-      credentials,
-      region: backend.bedrockConfig.region,
-      service: 'bedrock',
-      sha256: Sha256,
-    })
-
-    // Sign the request
-    const signedRequest = await signer.sign(httpRequest)
-
-    // Return signed headers
-    return signedRequest.headers as Record<string, string>
+    const signed = await signer.sign()
+    return Object.fromEntries(signed.headers.entries())
   }
 
-  prepareRequestBody(standardizedRequest: StandardizedRequest, backend: BackendConfig): any {
-    const body = { ...standardizedRequest.originalBody }
-
-    // Ensure anthropic_version is set
-    if (!body.anthropic_version) {
-      body.anthropic_version = 'bedrock-2023-05-31'
+  prepareRequestBody(
+    request: StandardizedRequest,
+    _backend: BackendConfig
+  ): Record<string, unknown> {
+    return {
+      ...request.originalBody,
+      anthropic_version: request.originalBody.anthropic_version || 'bedrock-2023-05-31',
     }
-
-    return body
   }
 
-  getTargetUrl(backend: BackendConfig, standardizedRequest: StandardizedRequest): string {
-    if (!backend.bedrockConfig) {
-      throw new Error('Bedrock configuration is missing for this backend')
-    }
-
-    // Construct Bedrock Runtime URL
-    const baseUrl = `https://bedrock-runtime.${backend.bedrockConfig.region}.amazonaws.com`
-
-    // Use backend-specific model if configured, otherwise use the model from request
-    const model = backend.model || standardizedRequest.model
-
-    // Bedrock URLs need model in path and endpoint based on streaming
-    // Format: https://bedrock-runtime.{region}.amazonaws.com/model/{model-id}/invoke
-    // or /model/{model-id}/invoke-with-response-stream
-    const endpoint = standardizedRequest.stream ? 'invoke-with-response-stream' : 'invoke'
-
-    const url = new URL(`/model/${model}/${endpoint}`, baseUrl)
-    return url.toString()
+  getTargetUrl(backend: BackendConfig, request: StandardizedRequest): string {
+    if (!backend.bedrockConfig) throw new Error('Bedrock configuration is missing for this backend')
+    const model = encodeURI(backend.model || request.model)
+    const endpoint = request.stream ? 'invoke-with-response-stream' : 'invoke'
+    return `https://bedrock-runtime.${backend.bedrockConfig.region}.amazonaws.com/model/${model}/${endpoint}`
   }
+}
 
-  /**
-   * Bedrock uses binary event-stream format for streaming responses
-   */
-  protected useBinaryStream(): boolean {
-    return true
-  }
-
-  protected processChunk(chunk: string | Uint8Array): string | Uint8Array {
-    // For Bedrock, return chunk as-is (binary event-stream)
-    return chunk
-  }
+async function sha256(body: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
 }

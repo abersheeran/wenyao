@@ -1,87 +1,21 @@
-# Welcome to React Router!
+# 文鳐管理面板
 
-A modern, production-ready template for building full-stack React applications using React Router.
+React Router SPA（`ssr: false`），由同一个 Cloudflare Worker 的 Static Assets 托管。页面路由为 `/`、`/apikeys`、`/affinity`、`/stats`、`/metrics`。
 
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/remix-run/react-router-templates/tree/main/default)
-
-## Features
-
-- 🚀 Server-side rendering
-- ⚡️ Hot Module Replacement (HMR)
-- 📦 Asset bundling and optimization
-- 🔄 Data loading and mutations
-- 🔒 TypeScript by default
-- 🎉 TailwindCSS for styling
-- 📖 [React Router docs](https://reactrouter.com/)
-
-## Getting Started
-
-### Installation
-
-Install the dependencies:
+在本目录安装依赖并启动前端开发服务器：
 
 ```bash
-npm install
-```
-
-### Development
-
-Start the development server with HMR:
-
-```bash
+npm ci
 npm run dev
 ```
 
-Your application will be available at `http://localhost:5173`.
+开发服务器将 `/admin` 请求代理到 `http://localhost:8787`。请先按[项目 README](../README.md)准备 `.dev.vars`、应用本地 D1 migrations 并启动 Wrangler，或在根目录运行 `npm run dev:all`。
 
-## Building for Production
-
-Create a production build:
+检查与构建：
 
 ```bash
+npm run typecheck
 npm run build
 ```
 
-## Deployment
-
-### Docker Deployment
-
-To build and run using Docker:
-
-```bash
-docker build -t my-app .
-
-# Run the container
-docker run -p 3000:3000 my-app
-```
-
-The containerized application can be deployed to any platform that supports Docker, including:
-
-- AWS ECS
-- Google Cloud Run
-- Azure Container Apps
-- Digital Ocean App Platform
-- Fly.io
-- Railway
-
-### DIY Deployment
-
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
-
-Make sure to deploy the output of `npm run build`
-
-```
-├── package.json
-├── package-lock.json (or pnpm-lock.yaml, or bun.lockb)
-├── build/
-│   ├── client/    # Static assets
-│   └── server/    # Server-side code
-```
-
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
-
----
-
-Built with ❤️ using React Router.
+构建产物为 `build/client`；部署步骤见[项目 README](../README.md#部署)。

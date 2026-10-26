@@ -1,314 +1,288 @@
-import { affinityManager } from './affinity-manager.js'
-import { mongoDBService } from './mongodb.js'
-
+import type { ApiKey } from '../types/apikey.js'
 import type { BackendConfig, ModelConfig } from '../types/backend.js'
 
-/**
- * Config Manager
- *
- * Manages model and backend configurations.
- * Supports synchronization with MongoDB and real-time watching of changes.
- * Provides lookup methods for load balancing and affinity-based routing.
- */
+interface ApiKeyRow {
+  key: string
+  description: string
+  models: string
+  created_at: number
+  last_used_at: number | null
+}
+
+export interface ConfigSnapshot {
+  models: ModelConfig[]
+  apiKeys: ApiKey[]
+}
+
+interface CachedSnapshot {
+  snapshot: ConfigSnapshot
+  expiresAt: number
+}
+
+// Only parsed data is shared between requests, never an in-flight I/O promise.
+const snapshots = new WeakMap<D1Database, CachedSnapshot>()
+const revisions = new WeakMap<D1Database, number>()
+const CACHE_TTL_MS = 10_000
+
+export class BusinessError extends Error {
+  constructor(
+    message: string,
+    readonly status: 400 | 404 | 409 | 503
+  ) {
+    super(message)
+  }
+}
+
+function apiKeyFromRow(row: ApiKeyRow): ApiKey {
+  return {
+    key: row.key,
+    description: row.description,
+    models: JSON.parse(row.models) as string[],
+    createdAt: new Date(row.created_at),
+    ...(row.last_used_at === null ? {} : { lastUsedAt: new Date(row.last_used_at) }),
+  }
+}
+
 export class ConfigManager {
-  /** Map of model names to their configurations */
-  private modelConfigs: Map<string, ModelConfig> = new Map()
-  /** Flag indicating if the manager is currently synchronized with MongoDB */
-  private usesMongoDB: boolean = false
+  constructor(private readonly db: D1Database) {}
 
-  /**
-   * Initializes configurations from MongoDB.
-   * If MongoDB is not connected, it falls back to in-memory storage.
-   */
-  async initializeFromMongoDB(): Promise<void> {
-    if (!mongoDBService.isConnected()) {
-      console.log('MongoDB not connected, using in-memory storage')
-      return
-    }
+  invalidate(): void {
+    const cached = snapshots.get(this.db)
+    if (cached) cached.expiresAt = 0
+    revisions.set(this.db, (revisions.get(this.db) ?? 0) + 1)
+  }
 
+  async getSnapshot(): Promise<ConfigSnapshot> {
+    const cached = snapshots.get(this.db)
+    if (cached && cached.expiresAt > Date.now()) return cached.snapshot
+    const revision = revisions.get(this.db) ?? 0
     try {
-      const collection = mongoDBService.getModelsCollection()
-      const models = await collection.find().toArray()
-
-      this.modelConfigs.clear()
-      for (const model of models) {
-        this.modelConfigs.set(model.model, model)
+      const [models, apiKeys] = await this.db.batch([
+        this.db.prepare('SELECT config FROM models'),
+        this.db.prepare('SELECT key, description, models, created_at, last_used_at FROM api_keys'),
+      ])
+      const snapshot = {
+        models: (models.results as { config: string }[]).map(
+          (row) => JSON.parse(row.config) as ModelConfig
+        ),
+        apiKeys: (apiKeys.results as unknown as ApiKeyRow[]).map(apiKeyFromRow),
       }
-
-      this.usesMongoDB = true
-      console.log(`Loaded ${models.length} model configurations from MongoDB`)
-
-      // Start watching for changes
-      await this.startWatchingChanges()
+      // A management write during this read must not repopulate a stale cache.
+      if ((revisions.get(this.db) ?? 0) === revision) {
+        snapshots.set(this.db, { snapshot, expiresAt: Date.now() + CACHE_TTL_MS })
+      }
+      return snapshot
     } catch (error) {
-      console.error('Failed to initialize from MongoDB:', error)
-      this.usesMongoDB = false
+      console.error('Failed to refresh configuration cache:', error)
+      if (cached) return cached.snapshot
+      throw new BusinessError('Configuration is temporarily unavailable', 503)
     }
   }
 
-  /**
-   * Starts watching for configuration changes in MongoDB.
-   * Updates the local cache in real-time when changes occur in the database.
-   */
-  private async startWatchingChanges(): Promise<void> {
-    await mongoDBService.watchModels((modelConfig, operationType) => {
-      switch (operationType) {
-        case 'insert':
-        case 'update':
-        case 'replace':
-          console.log(`MongoDB change detected: ${operationType} model ${modelConfig.model}`)
-          this.modelConfigs.set(modelConfig.model, modelConfig)
-          break
-        case 'delete':
-          console.log(`MongoDB change detected: delete model ${modelConfig.model}`)
-          this.modelConfigs.delete(modelConfig.model)
-          break
+  async getAllModels(): Promise<ModelConfig[]> {
+    const rows = await this.db.prepare('SELECT config FROM models').all<{ config: string }>()
+    return rows.results.map((row) => JSON.parse(row.config) as ModelConfig)
+  }
+
+  async getModelConfig(model: string): Promise<ModelConfig | undefined> {
+    const row = await this.db
+      .prepare('SELECT config FROM models WHERE model = ?')
+      .bind(model)
+      .first<{ config: string }>()
+    return row ? (JSON.parse(row.config) as ModelConfig) : undefined
+  }
+
+  private async mutateModel(
+    model: string,
+    mutate: (config: ModelConfig) => ModelConfig,
+    deletedBackendId?: string
+  ): Promise<ModelConfig> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await this.db
+        .prepare('SELECT config FROM models WHERE model = ?')
+        .bind(model)
+        .first<{ config: string }>()
+      if (!row) throw new BusinessError(`Model configuration for ${model} not found`, 404)
+
+      // Reapply the edit and validation to the latest document on every retry.
+      const updated = mutate(JSON.parse(row.config) as ModelConfig)
+      this.validateProviders(updated)
+      const nextConfig = JSON.stringify(updated)
+      if (nextConfig === row.config) {
+        this.invalidate()
+        return updated
       }
-    })
-  }
-
-  /**
-   * Returns all model configurations.
-   */
-  getAllModels(): ModelConfig[] {
-    return Array.from(this.modelConfigs.values())
-  }
-
-  /**
-   * Gets configuration for a specific model.
-   * @param model - The name of the model
-   */
-  getModelConfig(model: string): ModelConfig | undefined {
-    return this.modelConfigs.get(model)
-  }
-
-  /**
-   * Gets all enabled backends for a model.
-   * @param model - The name of the model
-   */
-  getEnabledBackends(model: string): BackendConfig[] {
-    const modelConfig = this.modelConfigs.get(model)
-    if (!modelConfig) {
-      return []
+      const statement = this.db
+        .prepare('UPDATE models SET config = ? WHERE model = ? AND config = ?')
+        .bind(nextConfig, model, row.config)
+      const result =
+        deletedBackendId === undefined
+          ? await statement.run()
+          : (
+              await this.db.batch([
+                statement,
+                // changes() refers to the preceding CAS in this same transaction.
+                // A conflict must not clear affinity for a backend that still exists.
+                this.db
+                  .prepare(
+                    'DELETE FROM affinity_mappings WHERE model = ? AND backend_id = ? AND changes() > 0'
+                  )
+                  .bind(model, deletedBackendId),
+              ])
+            )[0]
+      if (result.meta.changes > 0) {
+        this.invalidate()
+        return updated
+      }
     }
-    return modelConfig.backends.filter((backend) => backend.enabled)
+    throw new BusinessError(`Model configuration for ${model} changed concurrently`, 409)
   }
 
-  /**
-   * Alias for getEnabledBackends.
-   * @param model - The name of the model
-   */
-  getAllEnabledBackends(model: string): BackendConfig[] {
-    return this.getEnabledBackends(model)
-  }
-
-  /**
-   * Gets backends available for load balancer selection.
-   * Excludes enabled backends with weight=0.
-   * @param model - The name of the model
-   */
-  getBackendsForSelection(model: string): BackendConfig[] {
-    return this.getEnabledBackends(model).filter((backend) => backend.weight > 0)
-  }
-
-  /**
-   * Gets a specific backend by its ID for a given model.
-   * @param model - The name of the model
-   * @param backendId - The unique ID of the backend
-   */
-  getBackend(model: string, backendId: string): BackendConfig | undefined {
-    const modelConfig = this.modelConfigs.get(model)
-    if (!modelConfig) {
-      return undefined
+  private validateProviders(config: ModelConfig): void {
+    for (const backend of config.backends) {
+      if (backend.provider !== config.provider) {
+        throw new BusinessError(
+          `Backend provider '${backend.provider}' does not match model provider '${config.provider}'`,
+          400
+        )
+      }
     }
-    return modelConfig.backends.find((backend) => backend.id === backendId)
+    const ids = config.backends.map((backend) => backend.id)
+    if (new Set(ids).size !== ids.length) {
+      throw new BusinessError('Backend IDs must be unique within a model', 409)
+    }
   }
 
-  /**
-   * Adds a new model configuration.
-   * Persists to MongoDB if available.
-   * @param config - The model configuration to add
-   */
   async addModelConfig(config: ModelConfig): Promise<ModelConfig> {
-    if (this.modelConfigs.has(config.model)) {
-      throw new Error(`Model configuration for ${config.model} already exists`)
+    this.validateProviders(config)
+    const result = await this.db
+      .prepare('INSERT OR IGNORE INTO models (model, config) VALUES (?, ?)')
+      .bind(config.model, JSON.stringify(config))
+      .run()
+    if (!result.meta.changes) {
+      throw new BusinessError(`Model configuration for ${config.model} already exists`, 409)
     }
-
-    if (this.usesMongoDB) {
-      const collection = mongoDBService.getModelsCollection()
-      await collection.insertOne(config)
-      // Update in-memory immediately to avoid UI race with change stream
-      this.modelConfigs.set(config.model, config)
-    } else {
-      this.modelConfigs.set(config.model, config)
-    }
-
+    this.invalidate()
     return config
   }
 
-  // Update an existing model configuration
   async updateModelConfig(
     model: string,
     updates: Partial<Omit<ModelConfig, 'model'>>
   ): Promise<ModelConfig> {
-    const modelConfig = this.modelConfigs.get(model)
-    if (!modelConfig) {
-      throw new Error(`Model configuration for ${model} not found`)
-    }
-
-    const updated = { ...modelConfig, ...updates }
-
-    if (this.usesMongoDB) {
-      const collection = mongoDBService.getModelsCollection()
-      await collection.updateOne({ model }, { $set: updates })
-      // Update in-memory immediately to avoid UI race with change stream
-      this.modelConfigs.set(model, updated)
-    } else {
-      this.modelConfigs.set(model, updated)
-    }
-
-    return updated
+    const definedUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([, value]) => value !== undefined)
+    )
+    return this.mutateModel(model, (config) => ({ ...config, ...definedUpdates }))
   }
 
-  // Delete a model configuration
   async deleteModelConfig(model: string): Promise<boolean> {
-    if (!this.modelConfigs.has(model)) {
-      return false
-    }
-
-    if (this.usesMongoDB) {
-      const collection = mongoDBService.getModelsCollection()
-      const result = await collection.deleteOne({ model })
-      if (result.deletedCount && result.deletedCount > 0) {
-        // Update in-memory immediately to avoid UI race with change stream
-        this.modelConfigs.delete(model)
-
-        // Clean up affinity mappings for deleted model
-        await affinityManager.cleanupModelMappings(model)
-
-        return true
-      }
-      return false
-    } else {
-      const deleted = this.modelConfigs.delete(model)
-      if (deleted) {
-        // Clean up affinity mappings for deleted model
-        await affinityManager.cleanupModelMappings(model)
-      }
-      return deleted
-    }
+    const [result] = await this.db.batch([
+      this.db.prepare('DELETE FROM models WHERE model = ?').bind(model),
+      this.db.prepare('DELETE FROM affinity_mappings WHERE model = ?').bind(model),
+    ])
+    this.invalidate()
+    return result.meta.changes > 0
   }
 
-  // Add a backend to an existing model configuration
   async addBackendToModel(model: string, backend: BackendConfig): Promise<ModelConfig> {
-    const modelConfig = this.modelConfigs.get(model)
-    if (!modelConfig) {
-      throw new Error(`Model configuration for ${model} not found`)
-    }
-
-    // Check if backend provider matches model provider
-    if (backend.provider !== modelConfig.provider) {
-      throw new Error(
-        `Backend provider '${backend.provider}' does not match model provider '${modelConfig.provider}'`
-      )
-    }
-
-    // Check if backend ID already exists
-    if (modelConfig.backends.some((b) => b.id === backend.id)) {
-      throw new Error(`Backend with id ${backend.id} already exists in model ${model}`)
-    }
-
-    const updatedBackends = [...modelConfig.backends, backend]
-
-    if (this.usesMongoDB) {
-      const collection = mongoDBService.getModelsCollection()
-      await collection.updateOne({ model }, { $set: { backends: updatedBackends } })
-      // Update in-memory immediately
-      const updated = { ...modelConfig, backends: updatedBackends }
-      this.modelConfigs.set(model, updated)
-      return updated
-    } else {
-      const updated = { ...modelConfig, backends: updatedBackends }
-      this.modelConfigs.set(model, updated)
-      return updated
-    }
+    return this.mutateModel(model, (config) => {
+      this.validateProviders({ ...config, backends: [backend] })
+      if (config.backends.some((item) => item.id === backend.id)) {
+        throw new BusinessError(
+          `Backend with id ${backend.id} already exists in model ${model}`,
+          409
+        )
+      }
+      return { ...config, backends: [...config.backends, backend] }
+    })
   }
 
-  // Update a specific backend within a model configuration
   async updateBackendInModel(
     model: string,
     backendId: string,
     updates: Partial<Omit<BackendConfig, 'id'>>
   ): Promise<ModelConfig> {
-    const modelConfig = this.modelConfigs.get(model)
-    if (!modelConfig) {
-      throw new Error(`Model configuration for ${model} not found`)
-    }
-
-    const backendIndex = modelConfig.backends.findIndex((b) => b.id === backendId)
-    if (backendIndex === -1) {
-      throw new Error(`Backend with id ${backendId} not found in model ${model}`)
-    }
-
-    const updatedBackends = [...modelConfig.backends]
-    updatedBackends[backendIndex] = { ...updatedBackends[backendIndex], ...updates }
-
-    if (this.usesMongoDB) {
-      const collection = mongoDBService.getModelsCollection()
-      await collection.updateOne({ model }, { $set: { backends: updatedBackends } })
-      // Update in-memory immediately
-      const updated = { ...modelConfig, backends: updatedBackends }
-      this.modelConfigs.set(model, updated)
-      return updated
-    } else {
-      const updated = { ...modelConfig, backends: updatedBackends }
-      this.modelConfigs.set(model, updated)
-      return updated
-    }
+    const definedUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([, value]) => value !== undefined)
+    )
+    return this.mutateModel(model, (config) => {
+      const index = config.backends.findIndex((item) => item.id === backendId)
+      if (index === -1) {
+        throw new BusinessError(`Backend with id ${backendId} not found in model ${model}`, 404)
+      }
+      const backends = [...config.backends]
+      backends[index] = { ...backends[index], ...definedUpdates }
+      return { ...config, backends }
+    })
   }
 
-  // Delete a backend from a model configuration
   async deleteBackendFromModel(model: string, backendId: string): Promise<ModelConfig> {
-    const modelConfig = this.modelConfigs.get(model)
-    if (!modelConfig) {
-      throw new Error(`Model configuration for ${model} not found`)
-    }
-
-    const updatedBackends = modelConfig.backends.filter((b) => b.id !== backendId)
-
-    if (updatedBackends.length === modelConfig.backends.length) {
-      throw new Error(`Backend with id ${backendId} not found in model ${model}`)
-    }
-
-    // Clean up affinity mappings for deleted backend
-    await affinityManager.cleanupBackendMappings(backendId)
-
-    // Allow empty backends array - user can add backends later
-
-    if (this.usesMongoDB) {
-      const collection = mongoDBService.getModelsCollection()
-      await collection.updateOne({ model }, { $set: { backends: updatedBackends } })
-      // Update in-memory immediately
-      const updated = { ...modelConfig, backends: updatedBackends }
-      this.modelConfigs.set(model, updated)
-      return updated
-    } else {
-      const updated = { ...modelConfig, backends: updatedBackends }
-      this.modelConfigs.set(model, updated)
-      return updated
-    }
+    return this.mutateModel(
+      model,
+      (config) => {
+        if (!config.backends.some((backend) => backend.id === backendId)) {
+          throw new BusinessError(`Backend with id ${backendId} not found in model ${model}`, 404)
+        }
+        return {
+          ...config,
+          backends: config.backends.filter((backend) => backend.id !== backendId),
+        }
+      },
+      backendId
+    )
   }
 
-  // Check if model exists
-  hasModel(model: string): boolean {
-    return this.modelConfigs.has(model)
+  async getAllApiKeys(): Promise<ApiKey[]> {
+    const rows = await this.db.prepare('SELECT * FROM api_keys').all<ApiKeyRow>()
+    return rows.results.map(apiKeyFromRow)
   }
 
-  // Get total weight of enabled backends for a model
-  getTotalWeight(model: string): number {
-    return this.getEnabledBackends(model).reduce((sum, backend) => sum + backend.weight, 0)
+  async getApiKey(key: string): Promise<ApiKey | undefined> {
+    const row = await this.db
+      .prepare('SELECT * FROM api_keys WHERE key = ?')
+      .bind(key)
+      .first<ApiKeyRow>()
+    return row ? apiKeyFromRow(row) : undefined
+  }
+
+  async addApiKey(input: Pick<ApiKey, 'key' | 'description' | 'models'>): Promise<ApiKey> {
+    const createdAt = new Date()
+    const result = await this.db
+      .prepare(
+        'INSERT OR IGNORE INTO api_keys (key, description, models, created_at) VALUES (?, ?, ?, ?)'
+      )
+      .bind(input.key, input.description, JSON.stringify(input.models), createdAt.getTime())
+      .run()
+    if (!result.meta.changes) throw new BusinessError('API key already exists', 409)
+    this.invalidate()
+    return { ...input, createdAt }
+  }
+
+  async updateApiKey(
+    key: string,
+    updates: Partial<Pick<ApiKey, 'description' | 'models'>>
+  ): Promise<ApiKey> {
+    const row = await this.db
+      .prepare(
+        `UPDATE api_keys
+      SET description = COALESCE(?, description), models = COALESCE(?, models)
+      WHERE key = ? RETURNING *`
+      )
+      .bind(
+        updates.description ?? null,
+        updates.models === undefined ? null : JSON.stringify(updates.models),
+        key
+      )
+      .first<ApiKeyRow>()
+    if (!row) throw new BusinessError('API key not found', 404)
+    this.invalidate()
+    return apiKeyFromRow(row)
+  }
+
+  async deleteApiKey(key: string): Promise<void> {
+    const result = await this.db.prepare('DELETE FROM api_keys WHERE key = ?').bind(key).run()
+    if (!result.meta.changes) throw new BusinessError('API key not found', 404)
+    this.invalidate()
   }
 }
-
-// Singleton instance
-export const configManager = new ConfigManager()

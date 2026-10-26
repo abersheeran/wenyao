@@ -26,7 +26,8 @@ export interface BackendConfig {
   model?: string // Optional: Override the model name when forwarding to this backend
   streamingTTFTTimeout?: number // Optional: TTFT timeout in milliseconds for streaming requests
   nonStreamingTTFTTimeout?: number // Optional: TTFT timeout in milliseconds for non-streaming requests
-  recordRequests?: boolean // Optional: Record all requests (URL, headers, body) to MongoDB
+  recordRequests?: boolean // Optional: Record request metadata in D1 and body in R2
+  recordResponses?: boolean // Optional: Record responses when request recording is enabled
   maxConcurrentRequests?: number // Optional: Maximum concurrent requests (undefined/0 = no limit, >0 = specific limit)
 
   // Provider-specific configurations (one of these must be present based on provider type)
@@ -80,7 +81,6 @@ export interface BackendStats {
 
 // Historical stats data point (stored in database)
 export interface StatsDataPoint {
-  instanceId: string // Unique identifier for the server instance
   backendId: string
   timestamp: Date // Time of the data point
   totalRequests: number
@@ -108,4 +108,15 @@ export interface RecordedRequest {
   url: string // Full request URL
   headers: Record<string, string> // Complete headers as-is
   body: string // Request body as string (JSON stringified)
+  response: RecordedResponse | null
+}
+
+export interface RecordedResponse {
+  status: number | null
+  headers: Record<string, string> | null
+  body: string
+  bodyEncoding: 'utf8' | 'base64'
+  error: string | null
+  truncated: boolean
+  completedAt: string
 }
