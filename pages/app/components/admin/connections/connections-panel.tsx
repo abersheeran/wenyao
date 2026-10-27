@@ -61,7 +61,7 @@ export function ConnectionsPanel({ api }: { api: ReturnType<typeof useAdminApi> 
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>ID</TableHead>
+              <TableHead>Name / ID</TableHead>
               <TableHead>Provider</TableHead>
               <TableHead>URL / Region</TableHead>
               <TableHead>References</TableHead>
@@ -71,7 +71,10 @@ export function ConnectionsPanel({ api }: { api: ReturnType<typeof useAdminApi> 
           <TableBody>
             {connections.map((connection) => (
               <TableRow key={connection.id}>
-                <TableCell className="font-mono text-sm">{connection.id}</TableCell>
+                <TableCell className="text-sm">
+                  <div>{connection.name || connection.id}</div>
+                  {connection.name && <div className="font-mono text-xs text-gray-500">{connection.id}</div>}
+                </TableCell>
                 <TableCell>
                   <span className={`px-2 py-0.5 rounded text-xs whitespace-nowrap ${getProviderBadgeClass(connection.provider)}`}>
                     {getProviderDisplayName(connection.provider)}

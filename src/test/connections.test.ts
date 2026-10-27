@@ -8,11 +8,13 @@ import type { Connection } from '../types/connection.js'
 
 const openai: Connection = {
   id: 'shared',
+  name: '',
   provider: 'openai',
   openaiConfig: { url: 'https://upstream.example', apiKey: 'first-secret' },
 }
 const bedrock: Connection = {
   id: 'aws',
+  name: '',
   provider: 'bedrock',
   bedrockConfig: { region: 'us-east-1', accessKeyId: 'access', secretAccessKey: 'secret' },
 }
@@ -71,6 +73,32 @@ function databaseBeforeWrite(prefix: string, beforeWrite: () => Promise<void>): 
 }
 
 describe('Shared connections management', () => {
+  it.each([
+    { label: 'trimmed', name: ' \tShared upstream\n ', expectedName: 'Shared upstream' },
+    { label: 'omitted', name: undefined, expectedName: '' },
+    { label: 'whitespace-only', name: ' \t\n ', expectedName: '' },
+  ])(
+    'returns the same $label name when creating, listing and reading',
+    async ({ name, expectedName }) => {
+      const { name: _name, ...unnamed } = openai
+      const response = await admin(
+        '/connections',
+        'POST',
+        name === undefined ? unnamed : { ...unnamed, name }
+      )
+      expect(response.status).toBe(201)
+      const connection = { ...openai, name: expectedName }
+      expect(await response.json()).toEqual({ connection })
+      expect(await (await admin('/connections')).json()).toEqual({ connections: [connection] })
+      expect(await (await admin('/connections/shared')).json()).toEqual({ connection })
+    }
+  )
+
+  it('allows connections to share the same display name', async () => {
+    expect((await admin('/connections', 'POST', { ...openai, name: 'Shared' })).status).toBe(201)
+    expect((await admin('/connections', 'POST', { ...bedrock, name: 'Shared' })).status).toBe(201)
+  })
+
   it('creates, lists, reads, replaces and deletes both provider configurations', async () => {
     expect((await admin('/connections', 'POST', openai)).status).toBe(201)
     expect((await admin('/connections', 'POST', bedrock)).status).toBe(201)
@@ -98,6 +126,76 @@ describe('Shared connections management', () => {
     expect((await admin('/connections/aws', 'DELETE')).status).toBe(200)
     expect(await (await admin('/connections')).json()).toEqual({ connections: [] })
   })
+
+  it.each([openai, bedrock])(
+    'updates only supplied name and configuration fields for $provider',
+    async (connection) => {
+      const path = `/connections/${connection.id}`
+      expect(
+        (await admin('/connections', 'POST', { ...connection, name: 'Original' })).status
+      ).toBe(201)
+      const renamed = { ...connection, name: 'Renamed' }
+      const nameResponse = await admin(path, 'PUT', { name: '  Renamed  ' })
+      expect(nameResponse.status).toBe(200)
+      expect(await nameResponse.json()).toEqual({ connection: renamed })
+      expect(await (await admin(path)).json()).toEqual({ connection: renamed })
+
+      const replacement =
+        connection.provider === 'openai'
+          ? { openaiConfig: { url: 'https://replacement.example', apiKey: 'replacement-secret' } }
+          : {
+              bedrockConfig: {
+                region: 'eu-west-1',
+                accessKeyId: 'replacement-access',
+                secretAccessKey: 'replacement-secret',
+              },
+            }
+      const reconfigured = { ...renamed, ...replacement }
+      const configResponse = await admin(path, 'PUT', replacement)
+      expect(configResponse.status).toBe(200)
+      expect(await configResponse.json()).toEqual({ connection: reconfigured })
+      expect(await (await admin(path)).json()).toEqual({ connection: reconfigured })
+
+      const originalConfig =
+        connection.provider === 'openai'
+          ? { openaiConfig: connection.openaiConfig }
+          : { bedrockConfig: connection.bedrockConfig }
+      const combined = { ...connection, name: 'Together' }
+      const combinedResponse = await admin(path, 'PUT', { name: ' Together ', ...originalConfig })
+      expect(combinedResponse.status).toBe(200)
+      expect(await combinedResponse.json()).toEqual({ connection: combined })
+      expect(await (await admin(path)).json()).toEqual({ connection: combined })
+
+      const cleared = await admin(path, 'PUT', { name: ' \t\n ' })
+      expect(cleared.status).toBe(200)
+      expect(await cleared.json()).toEqual({ connection })
+      expect(await (await admin(path)).json()).toEqual({ connection })
+    }
+  )
+
+  it.each([openai, bedrock])(
+    'rejects empty updates, mismatched configurations and both configurations for $provider',
+    async (connection) => {
+      expect((await admin('/connections', 'POST', connection)).status).toBe(201)
+      const path = `/connections/${connection.id}`
+      const mismatched =
+        connection.provider === 'openai'
+          ? { bedrockConfig: bedrock.bedrockConfig }
+          : { openaiConfig: openai.openaiConfig }
+      for (const input of [
+        {},
+        { name: 'Rejected', ...mismatched },
+        {
+          name: 'Rejected',
+          openaiConfig: openai.openaiConfig,
+          bedrockConfig: bedrock.bedrockConfig,
+        },
+      ]) {
+        expect((await admin(path, 'PUT', input)).status).toBe(400)
+      }
+      expect(await (await admin(path)).json()).toEqual({ connection })
+    }
+  )
 
   it('rejects invalid IDs, mismatched fields, duplicate IDs and immutable fields', async () => {
     for (const id of ['', 'with space', 'a/b', '中文', 'a?']) {
@@ -156,6 +254,7 @@ describe('Shared connections management', () => {
       await admin('/connections/missing', 'PUT', { openaiConfig: openai.openaiConfig }),
       404
     )
+    await error(await admin('/connections/missing', 'PUT', { name: 'Missing' }), 404)
     await error(await admin('/connections/missing', 'DELETE'), 404)
   })
 

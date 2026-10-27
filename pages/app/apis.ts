@@ -13,7 +13,7 @@ export type BedrockConfig = {
   secretAccessKey: string;
 };
 
-export type Connection = { id: string } & (
+export type Connection = { id: string; name: string } & (
   | { provider: 'openai'; openaiConfig: OpenAIConfig }
   | { provider: 'bedrock'; bedrockConfig: BedrockConfig }
 );
@@ -166,7 +166,10 @@ export function useAdminApi() {
       const data = await res.json();
       return data.connection;
     },
-    async createConnection(payload: Connection): Promise<Connection> {
+    async createConnection(payload: { id: string; name?: string } & (
+      | { provider: 'openai'; openaiConfig: OpenAIConfig }
+      | { provider: 'bedrock'; bedrockConfig: BedrockConfig }
+    )): Promise<Connection> {
       const res = await fetch(`${base}/connections`, {
         method: "POST",
         headers: createAuthHeaders({ "Content-Type": "application/json" }),
@@ -179,11 +182,11 @@ export function useAdminApi() {
       const data = await res.json();
       return data.connection;
     },
-    async updateConnection(id: string, config: ConnectionConfig): Promise<Connection> {
+    async updateConnection(id: string, updates: { name: string } | ({ name?: string } & ConnectionConfig)): Promise<Connection> {
       const res = await fetch(`${base}/connections/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers: createAuthHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(config),
+        body: JSON.stringify(updates),
       });
       if (!res.ok) {
         const error = await res.json();

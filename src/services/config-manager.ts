@@ -1,4 +1,4 @@
-import type { UpdateConnectionInput } from '../schemas/connection.js'
+import type { CreateConnectionInput, UpdateConnectionInput } from '../schemas/connection.js'
 import type { ApiKey } from '../types/apikey.js'
 import type { BackendConfig, ModelConfig, ResolvedModelConfig } from '../types/backend.js'
 import type { Connection } from '../types/connection.js'
@@ -13,6 +13,7 @@ interface ApiKeyRow {
 
 interface ConnectionRow {
   id: string
+  name: string
   provider: Connection['provider']
   config: string
 }
@@ -62,9 +63,10 @@ function apiKeyFromRow(row: ApiKeyRow): ApiKey {
 }
 
 function connectionFromRow(row: ConnectionRow): Connection {
-  return row.provider === 'openai'
-    ? { id: row.id, provider: row.provider, openaiConfig: JSON.parse(row.config) }
-    : { id: row.id, provider: row.provider, bedrockConfig: JSON.parse(row.config) }
+  const { id, name, provider } = row
+  return provider === 'openai'
+    ? { id, name, provider, openaiConfig: JSON.parse(row.config) }
+    : { id, name, provider, bedrockConfig: JSON.parse(row.config) }
 }
 
 function parseModelConfig(config: string): ModelConfig {
@@ -93,7 +95,7 @@ export class ConfigManager {
     try {
       const [models, connectionRows, apiKeys] = await this.db.batch([
         this.db.prepare('SELECT config FROM models'),
-        this.db.prepare('SELECT id, provider, config FROM connections'),
+        this.db.prepare('SELECT id, name, provider, config FROM connections'),
         this.db.prepare('SELECT key, description, models, created_at, last_used_at FROM api_keys'),
       ])
       const connections = (connectionRows.results as ConnectionRow[]).map(connectionFromRow)
@@ -345,54 +347,57 @@ export class ConfigManager {
 
   async getAllConnections(): Promise<Connection[]> {
     const rows = await this.db
-      .prepare('SELECT id, provider, config FROM connections ORDER BY id')
+      .prepare('SELECT id, name, provider, config FROM connections ORDER BY id')
       .all<ConnectionRow>()
     return rows.results.map(connectionFromRow)
   }
 
   async getConnection(id: string): Promise<Connection | undefined> {
     const row = await this.db
-      .prepare('SELECT id, provider, config FROM connections WHERE id = ?')
+      .prepare('SELECT id, name, provider, config FROM connections WHERE id = ?')
       .bind(id)
       .first<ConnectionRow>()
     return row ? connectionFromRow(row) : undefined
   }
 
-  async addConnection(connection: Connection): Promise<Connection> {
+  async addConnection(connection: CreateConnectionInput): Promise<Connection> {
+    const name = connection.name ?? ''
     const config =
       connection.provider === 'openai' ? connection.openaiConfig : connection.bedrockConfig
     const result = await this.db
-      .prepare('INSERT OR IGNORE INTO connections (id, provider, config) VALUES (?, ?, ?)')
-      .bind(connection.id, connection.provider, JSON.stringify(config))
+      .prepare('INSERT OR IGNORE INTO connections (id, name, provider, config) VALUES (?, ?, ?, ?)')
+      .bind(connection.id, name, connection.provider, JSON.stringify(config))
       .run()
     if (!result.meta.changes)
       throw new BusinessError(`Connection '${connection.id}' already exists`, 409)
     this.invalidate()
-    return connection
+    return { ...connection, name }
   }
 
   async updateConnection(id: string, updates: UpdateConnectionInput): Promise<Connection> {
     const connection = await this.getConnection(id)
     if (!connection) throw new BusinessError(`Connection '${id}' not found`, 404)
-    const config =
-      connection.provider === 'openai'
-        ? 'openaiConfig' in updates
-          ? updates.openaiConfig
-          : undefined
-        : 'bedrockConfig' in updates
-          ? updates.bedrockConfig
-          : undefined
-    if (!config) {
+    if (
+      (updates.openaiConfig !== undefined && connection.provider !== 'openai') ||
+      (updates.bedrockConfig !== undefined && connection.provider !== 'bedrock')
+    ) {
       throw new BusinessError(
         `Configuration does not match connection '${id}' provider '${connection.provider}'`,
         400
       )
     }
+    const config = updates.openaiConfig ?? updates.bedrockConfig
     const row = await this.db
       .prepare(
-        'UPDATE connections SET config = ? WHERE id = ? AND provider = ? RETURNING id, provider, config'
+        `UPDATE connections SET name = COALESCE(?, name), config = COALESCE(?, config)
+         WHERE id = ? AND provider = ? RETURNING id, name, provider, config`
       )
-      .bind(JSON.stringify(config), id, connection.provider)
+      .bind(
+        updates.name ?? null,
+        config === undefined ? null : JSON.stringify(config),
+        id,
+        connection.provider
+      )
       .first<ConnectionRow>()
     if (!row) throw new BusinessError(`Connection '${id}' not found`, 404)
     this.invalidate()

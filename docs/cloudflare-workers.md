@@ -50,7 +50,8 @@ CREATE TABLE models (
 CREATE TABLE connections (
   id       TEXT PRIMARY KEY,        -- 用户指定，全局唯一，创建后不可修改
   provider TEXT NOT NULL,           -- openai | bedrock，创建后不可修改
-  config   TEXT NOT NULL            -- JSON：OpenAI 为 {url, apiKey}，Bedrock 为 {region, accessKeyId, secretAccessKey}
+  config   TEXT NOT NULL,           -- JSON：OpenAI 为 {url, apiKey}，Bedrock 为 {region, accessKeyId, secretAccessKey}
+  name     TEXT NOT NULL DEFAULT '' -- 显示名，可修改，可重复；空字符串表示未命名
 );
 
 CREATE TABLE api_keys (
@@ -100,7 +101,7 @@ CREATE INDEX idx_recorded_model ON recorded_requests (model, timestamp);
 CREATE INDEX idx_recorded_timestamp ON recorded_requests (timestamp);
 ```
 
-`models.config` 保持原 `ModelConfig` 文档形状，只有一处不同：backend 用 `connectionId` 引用 `connections` 中的连接，不再内嵌 `openaiConfig` / `bedrockConfig`（见 5.8）。`connections` 表由 `migrations/0002_connections.sql` 创建。
+`models.config` 保持原 `ModelConfig` 文档形状，只有一处不同：backend 用 `connectionId` 引用 `connections` 中的连接，不再内嵌 `openaiConfig` / `bedrockConfig`（见 5.8）。`connections` 表由 `migrations/0002_connections.sql` 创建，`name` 列由 `migrations/0003_connection_names.sql` 添加。
 
 `recorded_requests` 还包含响应录制的列，直接写在 `migrations/0001_init.sql` 的建表语句中：
 
@@ -241,7 +242,11 @@ CREATE TABLE slots (
 
 上游连接信息是全局实体 connection，存在 `connections` 表：OpenAI 是 `url` + `apiKey`，Bedrock 是 `region` + `accessKeyId` + `secretAccessKey`。backend 只用 `connectionId` 引用 connection，不再内嵌凭据。任意模型的任意 backend 都可以引用同一个 connection。修改一次 connection（例如轮换 key）对所有引用它的 backend 生效；代理路径受 5.1 节缓存影响，最多 10 秒后生效。
 
-- **标识**：`id` 由用户指定，全局唯一，只能包含字母、数字、`.`、`_`、`-`。`id` 和 `provider` 创建后不可修改，只能修改该 provider 对应的配置。
+- **标识**：`id` 由用户指定，全局唯一，只能包含字母、数字、`.`、`_`、`-`。`id` 和 `provider` 创建后不可修改，只能修改名称和该 provider 对应的配置。
+- **名称**：`name` 是显示名，用于在选择和列表中区分 connection。
+  - 可选，可以随时修改，不要求唯一。
+  - 首尾空白会被去掉；为空表示未命名，界面上显示 `id`。
+  - 名称只用于管理界面，不参与引用，也不影响代理路径。
 - **引用完整性**：
   - 写入不能引入无效引用：本次新增或修改的 backend，其 `connectionId` 必须指向已存在、且 `provider` 与模型相同的 connection，否则返回 400。
   - 未改动的 backend 不重新校验。因此，迁移遗留的、未设置 connection 的 backend 不会阻塞同一模型的其他修改，可以逐个修复或删除。
@@ -251,16 +256,22 @@ CREATE TABLE slots (
 - **凭据暴露范围**：模型和 backend 的管理响应只包含 `connectionId`，不再包含凭据。凭据只通过 `/admin/connections` 返回。
 - **管理 API**：
   - `GET /admin/connections` 返回 `{ connections }`；`GET /admin/connections/:id` 返回 `{ connection }`，不存在时返回 404。
-  - `POST /admin/connections` 的请求体为 `{ id, provider, openaiConfig | bedrockConfig }`，返回 201 `{ connection }`，id 已存在时返回 409。
-  - `PUT /admin/connections/:id` 的请求体为该 provider 对应的配置字段（`{ openaiConfig }` 或 `{ bedrockConfig }`），整体替换，返回 `{ connection }`。字段与 provider 不符时返回 400，不存在时返回 404。
+  - `POST /admin/connections` 的请求体为 `{ id, name?, provider, openaiConfig | bedrockConfig }`，返回 201 `{ connection }`，id 已存在时返回 409。
+  - `PUT /admin/connections/:id` 的请求体为 `{ name?, openaiConfig? | bedrockConfig? }`，至少包含一个字段，返回 `{ connection }`。
+    - 只修改请求中出现的字段：可以只改名称，也可以只改配置。配置字段出现时整体替换。
+    - 配置字段与 provider 不符时返回 400，不存在时返回 404。
   - `DELETE /admin/connections/:id`：不存在时返回 404，被引用时返回 409。
-  - connection 的响应形状与创建请求相同：`{ id, provider, openaiConfig | bedrockConfig }`。
-- **管理面板**：新增 `/connections` 页，可以增删改 connection，并显示每个 connection 被哪些 `model/backendId` 引用。添加和编辑 backend 时，从与模型 provider 相同的 connection 中选择，不再填写 URL 和凭据。backend 列表显示所用的 connection，未设置时显示为未配置。
+  - connection 的响应形状为 `{ id, name, provider, openaiConfig | bedrockConfig }`，`name` 总是存在，未命名时为空字符串。
+- **管理面板**：
+  - 新增 `/connections` 页，可以增删改 connection（包括名称），并显示每个 connection 被哪些 `model/backendId` 引用。
+  - 添加和编辑 backend 时，从与模型 provider 相同的 connection 中选择，不再填写 URL 和凭据。选项显示名称，同时显示 `id` 和 URL / region，便于区分同名或未命名的 connection。
+  - backend 列表显示所用 connection 的名称，未命名时显示 `id`，未设置时显示为未配置。
 - **迁移已有数据**（`migrations/0002_connections.sql`）：
   - 从所有 backend 的内嵌配置中提取 connection。provider 和各配置字段值都相同的合并为一个 connection，不受 JSON 键顺序影响。
   - id 为 `{provider}-{n}`，例如 `openai-1`、`openai-2`、`bedrock-1`。n 在每个 provider 内从 1 开始，按首次出现的顺序编号：先按模型名升序，再按 backend 在数组中的位置。
   - 每个 backend 写入对应的 `connectionId` 并删除内嵌配置，backend 顺序和其他字段保持不变。没有有效内嵌配置的 backend 只删除内嵌配置，不设置 `connectionId`，需要在管理面板中补选。
   - `scripts/migrate-from-mongodb.ts` 按同样的合并和编号规则生成 connection，以及引用它们的模型。
+  - 迁移生成的 connection 都未命名，可以在管理面板中补充名称。
 
 ## 6. 接口变化
 

@@ -194,10 +194,11 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                         </TableHeader>
                         <TableBody>
                           {modelConfig.backends.map((backend) => {
+                            const connection = connections.find(connection => connection.id === backend.connectionId);
                             return (
                               <TableRow key={backend.id}>
                                 <TableCell className="font-mono">{backend.id}</TableCell>
-                                <TableCell className="font-mono text-sm">{backend.connectionId || <span className="text-gray-400">Not configured</span>}</TableCell>
+                                <TableCell className="text-sm">{connection?.name || backend.connectionId || <span className="text-gray-400">Not configured</span>}</TableCell>
                                 <TableCell>{backend.weight}</TableCell>
                                 <TableCell>{((backend as any).trafficRatio * 100).toFixed(1)}%</TableCell>
                                 <TableCell>

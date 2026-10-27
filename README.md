@@ -115,7 +115,7 @@ ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
 ## 限制与行为
 
 - 模型、connection 和代理 API key 在每个 isolate 内缓存 10 秒；connection 修改（包括轮换凭据）对所有引用它的 backend 生效，其他 isolate 最多 10 秒后看到变更。管理 API 直接读写 D1，写入后立即使当前 isolate 的配置缓存失效。
-- backend 写入改用 `connectionId`，不再接受内嵌 `openaiConfig` / `bedrockConfig`，属于不兼容变更。模型和后端的管理响应不再包含凭据；凭据只通过 `/admin/connections` 返回。connection 的 provider 必须与模型一致，被引用时删除返回 409，并列出 `model/backendId`。
+- backend 写入改用 `connectionId`，不再接受内嵌 `openaiConfig` / `bedrockConfig`，属于不兼容变更。模型和后端的管理响应不再包含凭据；凭据只通过 `/admin/connections` 返回。connection 可设置并修改显示名称，provider 必须与模型一致，被引用时删除返回 409，并列出 `model/backendId`。
 - 已部署实例应用 `0002_connections.sql` 时会自动合并已有内嵌连接并转换 backend；缺少有效内嵌配置的 backend 需要在管理面板中补选连接。
 - `ADMIN_APIKEYS` 必须配置。代理 key 缺失或无效返回 401，无权访问模型返回 403。代理 key 的 `lastUsedAt` 在同一 isolate 内最多每 60 秒写入一次。
 - 指标始终开启，按分钟汇总，保存 30 天。查询包含与时间窗口相交的分钟桶，因此不足一分钟的窗口仍可能包含整分钟的计数；TTFT 按流式、非流式分别使用 `sum / count`。负载均衡统计缓存 15 秒。

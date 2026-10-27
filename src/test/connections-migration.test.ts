@@ -146,9 +146,11 @@ async function runMigration(models: LegacyModel[]) {
       )
     )
   )
-  const migration = env.TEST_MIGRATIONS.find(({ name }) => name === '0002_connections.sql')
-  expect(migration).toBeDefined()
-  await env.DB.batch(migration!.queries.map((query) => env.DB.prepare(query)))
+  for (const name of ['0002_connections.sql', '0003_connection_names.sql']) {
+    const migration = env.TEST_MIGRATIONS.find((migration) => migration.name === name)
+    expect(migration).toBeDefined()
+    await env.DB.batch(migration!.queries.map((query) => env.DB.prepare(query)))
+  }
   return readData()
 }
 
@@ -177,6 +179,12 @@ function expectedModels(models: LegacyModel[]) {
 }
 
 describe('Shared connection migrations', () => {
+  it('defaults names to an empty string for connections created before 0003', async () => {
+    const migrated = await runMigration(legacyModels())
+    const names = await env.DB.prepare('SELECT id, name FROM connections ORDER BY id').all()
+    expect(names.results).toEqual(migrated.connections.map(({ id }) => ({ id, name: '' })))
+  })
+
   it('normalizes known config fields, numbers first occurrences, and preserves complete backend order', async () => {
     const source = legacyModels()
     const migrated = await runMigration(source)

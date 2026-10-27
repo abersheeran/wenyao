@@ -88,7 +88,13 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, connecti
                   </SelectTrigger>
                   <SelectContent>
                     {connections.map((connection) => (
-                      <SelectItem key={connection.id} value={connection.id}>{connection.id}</SelectItem>
+                      <SelectItem
+                        key={connection.id}
+                        value={connection.id}
+                        description={`${connection.id} · ${connection.provider === 'openai' ? connection.openaiConfig.url : connection.bedrockConfig.region}`}
+                      >
+                        {connection.name || connection.id}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

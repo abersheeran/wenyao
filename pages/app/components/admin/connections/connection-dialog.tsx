@@ -9,8 +9,8 @@ import { createDefaultProviderConfig, getProviderDisplayName } from "../../../co
 
 function createInitialForm(provider: ProviderType): Connection {
   return provider === 'openai'
-    ? { id: '', provider, openaiConfig: createDefaultProviderConfig(provider) as OpenAIConfig }
-    : { id: '', provider, bedrockConfig: createDefaultProviderConfig(provider) as BedrockConfig };
+    ? { id: '', name: '', provider, openaiConfig: createDefaultProviderConfig(provider) as OpenAIConfig }
+    : { id: '', name: '', provider, bedrockConfig: createDefaultProviderConfig(provider) as BedrockConfig };
 }
 
 export function ConnectionDialog({ open, onOpenChange, connection, onSaved }: {
@@ -28,7 +28,7 @@ export function ConnectionDialog({ open, onOpenChange, connection, onSaved }: {
       const config = form.provider === 'openai'
         ? { openaiConfig: form.openaiConfig }
         : { bedrockConfig: form.bedrockConfig };
-      await api.updateConnection(connection.id, config);
+      await api.updateConnection(connection.id, { name: form.name, ...config });
     } else {
       await api.createConnection(form);
     }
@@ -61,11 +61,20 @@ export function ConnectionDialog({ open, onOpenChange, connection, onSaved }: {
             </p>
           </div>
           <div>
+            <label htmlFor="connection-name" className="block text-sm mb-1">Name (optional)</label>
+            <Input
+              id="connection-name"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="Defaults to connection ID"
+            />
+          </div>
+          <div>
             <label htmlFor="connection-provider" className="block text-sm mb-1">Provider</label>
             <Select
               value={form.provider}
               disabled={!!connection}
-              onValueChange={(value: ProviderType) => setForm({ ...createInitialForm(value), id: form.id })}
+              onValueChange={(value: ProviderType) => setForm({ ...createInitialForm(value), id: form.id, name: form.name })}
             >
               <SelectTrigger id="connection-provider" className="w-full">
                 <SelectValue />

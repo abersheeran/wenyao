@@ -13,6 +13,7 @@ export const createConnectionSchema = z.discriminatedUnion('provider', [
   z
     .object({
       id: connectionIdSchema,
+      name: z.string().trim().optional(),
       provider: z.literal('openai'),
       openaiConfig: openaiConfigSchema,
     })
@@ -20,16 +21,31 @@ export const createConnectionSchema = z.discriminatedUnion('provider', [
   z
     .object({
       id: connectionIdSchema,
+      name: z.string().trim().optional(),
       provider: z.literal('bedrock'),
       bedrockConfig: bedrockConfigSchema,
     })
     .strict(),
 ])
 
-export const updateConnectionSchema = z.union([
-  z.object({ openaiConfig: openaiConfigSchema }).strict(),
-  z.object({ bedrockConfig: bedrockConfigSchema }).strict(),
-])
+export const updateConnectionSchema = z
+  .object({
+    name: z.string().trim().optional(),
+    openaiConfig: openaiConfigSchema.optional(),
+    bedrockConfig: bedrockConfigSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (updates) =>
+      updates.name !== undefined ||
+      updates.openaiConfig !== undefined ||
+      updates.bedrockConfig !== undefined,
+    'At least one field is required'
+  )
+  .refine(
+    (updates) => updates.openaiConfig === undefined || updates.bedrockConfig === undefined,
+    'Only one provider configuration is allowed'
+  )
 
 export type CreateConnectionInput = z.infer<typeof createConnectionSchema>
 export type UpdateConnectionInput = z.infer<typeof updateConnectionSchema>
