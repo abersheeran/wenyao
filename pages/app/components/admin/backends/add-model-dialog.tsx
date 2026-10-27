@@ -11,7 +11,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { useAdminApi, type LoadBalancingStrategy, type MinErrorRateOptions, type ProviderType } from "~/apis";
 
-export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (v: boolean) => void; onAdded: () => void; }) {
+export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (v: boolean) => void; onAdded: (model: string) => void; }) {
   const api = useAdminApi();
   const [form, setForm] = React.useState<{ model: string; provider: ProviderType; loadBalancingStrategy: LoadBalancingStrategy; enableAffinity?: boolean; minErrorRateOptions?: MinErrorRateOptions }>({
     model: "",
@@ -28,14 +28,14 @@ export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean;
 
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
-    await api.addModel({
+    const model = await api.addModel({
       ...form,
       minErrorRateOptions: form.loadBalancingStrategy === 'min-error-rate' ? minErrorRateOpts : undefined
     });
     setForm({ model: "", provider: "openai", loadBalancingStrategy: "weighted", enableAffinity: false });
     setMinErrorRateOpts({ minRequests: 20, circuitBreakerThreshold: 0.9, epsilon: 0.001, timeWindowMinutes: 15 });
     onOpenChange(false);
-    onAdded();
+    onAdded(model.model);
   }, [api, form, minErrorRateOpts, onOpenChange, onAdded]);
 
   return (
