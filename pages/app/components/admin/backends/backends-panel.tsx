@@ -10,7 +10,7 @@ import {
   TableCell,
 } from "../../ui/table";
 import { Switch } from "../../ui/switch";
-import { useAdminApi, type BackendConfig, type ModelConfig, type LoadBalancingStrategy } from "~/apis";
+import { useAdminApi, type BackendConfig, type ModelConfig, type LoadBalancingStrategy, type Connection } from "~/apis";
 import { AddModelDialog } from "./add-model-dialog";
 import { EditModelDialog } from "./edit-model-dialog";
 import { AddBackendDialog } from "./add-backend-dialog";
@@ -20,6 +20,7 @@ import { getProviderDisplayName, getProviderBadgeClass } from "../../../config/p
 
 export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   const [models, setModels] = React.useState<(ModelConfig & { backends: (BackendConfig & { trafficRatio: number })[] })[]>([]);
+  const [connections, setConnections] = React.useState<Connection[]>([]);
   const [expandedModels, setExpandedModels] = React.useState<Set<string>>(new Set());
   const [addModelOpen, setAddModelOpen] = React.useState(false);
   const [editingModel, setEditingModel] = React.useState<ModelConfig | null>(null);
@@ -30,8 +31,9 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
 
   const [listState, load] = useAsyncFn(async () => {
     try {
-      const data = await api.listModels();
+      const [data, connectionsData] = await Promise.all([api.listModels(), api.listConnections()]);
       setModels(data);
+      setConnections(connectionsData);
       // 默认展开所有模型
       setExpandedModels(new Set(data.map(m => m.model)));
       return data;
@@ -179,6 +181,7 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                         <TableHeader>
                           <TableRow>
                             <TableHead>ID</TableHead>
+                            <TableHead>Connection</TableHead>
                             <TableHead>Weight</TableHead>
                             <TableHead>Traffic Ratio</TableHead>
                             <TableHead>Max Concurrency</TableHead>
@@ -194,6 +197,7 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
                             return (
                               <TableRow key={backend.id}>
                                 <TableCell className="font-mono">{backend.id}</TableCell>
+                                <TableCell className="font-mono text-sm">{backend.connectionId || <span className="text-gray-400">Not configured</span>}</TableCell>
                                 <TableCell>{backend.weight}</TableCell>
                                 <TableCell>{((backend as any).trafficRatio * 100).toFixed(1)}%</TableCell>
                                 <TableCell>
@@ -295,6 +299,7 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
       <AddBackendDialog
         open={!!addingBackendFor}
         model={addingBackendFor}
+        connections={connections.filter(connection => connection.provider === models.find(m => m.model === addingBackendFor)?.provider)}
         provider={addingBackendFor ? models.find(m => m.model === addingBackendFor)?.provider ?? null : null}
         onOpenChange={(v) => !v && setAddingBackendFor(null)}
         onAdded={() => {
@@ -306,6 +311,7 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
         open={!!editingBackend}
         model={editingBackend?.model ?? null}
         backend={editingBackend?.backend ?? null}
+        connections={connections.filter(connection => connection.provider === models.find(m => m.model === editingBackend?.model)?.provider)}
         onOpenChange={(v) => !v && setEditingBackend(null)}
         onSaved={() => {
           setEditingBackend(null);

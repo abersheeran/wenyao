@@ -27,6 +27,7 @@
 | 入口 | `@hono/node-server` | `export default { fetch, scheduled }` |
 | 前端托管 | `serveStatic` | Workers Static Assets：SPA fallback；只有 `/admin/*`、`/v1/*`、`/health` 进入 Worker |
 | 模型 / 后端配置 | MongoDB + change stream + 内存 Map | D1 `models` 表 + isolate 内 TTL 缓存 |
+| 上游连接（URL / 凭据） | 内嵌在每个 backend 中 | D1 `connections` 表，全局共享，backend 按 `connectionId` 引用（见 5.8） |
 | 代理 API Key | MongoDB，每请求一次 `findOneAndUpdate` | D1 `api_keys` 表，与模型配置一起缓存；`last_used_at` 节流写入 |
 | 并发限制 / 活跃请求 | MongoDB 或 Redis | Durable Object `BackendConcurrency`，每个受限 backend 一个实例，名额存在 DO 内置 SQLite |
 | 指标 | MongoDB 时序集合 + 查询时聚合的 view | D1 `backend_stats_minute` 分钟汇总表，每请求一次 UPSERT |
@@ -44,6 +45,12 @@
 CREATE TABLE models (
   model  TEXT PRIMARY KEY,
   config TEXT NOT NULL              -- 完整 ModelConfig JSON（含 backends 数组）
+);
+
+CREATE TABLE connections (
+  id       TEXT PRIMARY KEY,        -- 用户指定，全局唯一，创建后不可修改
+  provider TEXT NOT NULL,           -- openai | bedrock，创建后不可修改
+  config   TEXT NOT NULL            -- JSON：OpenAI 为 {url, apiKey}，Bedrock 为 {region, accessKeyId, secretAccessKey}
 );
 
 CREATE TABLE api_keys (
@@ -93,7 +100,7 @@ CREATE INDEX idx_recorded_model ON recorded_requests (model, timestamp);
 CREATE INDEX idx_recorded_timestamp ON recorded_requests (timestamp);
 ```
 
-`models.config` 保持原 `ModelConfig` 文档形状，管理 API 和前端类型都不用改。
+`models.config` 保持原 `ModelConfig` 文档形状，只有一处不同：backend 用 `connectionId` 引用 `connections` 中的连接，不再内嵌 `openaiConfig` / `bedrockConfig`（见 5.8）。`connections` 表由 `migrations/0002_connections.sql` 创建。
 
 `recorded_requests` 还包含响应录制的列，直接写在 `migrations/0001_init.sql` 的建表语句中：
 
@@ -118,7 +125,7 @@ CREATE TABLE slots (
 
 ### 5.1 配置缓存
 
-- 代理路径每个 isolate 缓存一份 `models` 和 `api_keys`，TTL 10 秒。过期后用一次 `DB.batch()` 同时重新加载两张表。
+- 代理路径每个 isolate 缓存一份 `models`、`connections` 和 `api_keys`，TTL 10 秒。过期后用一次 `DB.batch()` 同时重新加载三张表。
 - 刷新失败时，有旧缓存就继续用旧缓存，并记录错误；没有缓存就返回 503。
 - 缓存里只放解析好的普通数据，不跨请求共享 Promise、stream 等 I/O 对象。
 - 管理 API 一律直接读写 D1，写完后失效当前 isolate 的缓存。效果：管理面板立即看到修改；代理路径在其他 isolate 上最多 10 秒后生效。新建的 API Key 同样最多 10 秒后可用。
@@ -230,6 +237,31 @@ CREATE TABLE slots (
 - **代理鉴权**：读配置缓存。`last_used_at` 在同一 isolate 内对同一个 key 最多每 60 秒写一次，写入放在 `waitUntil` 里。
 - **管理鉴权**：仍然从 `ADMIN_APIKEYS`（Worker secret，逗号分隔）读取。**改为 fail closed**：未配置时管理 API 返回 503。Worker 默认暴露在公网，管理接口会返回后端密钥，不能默认开放。
 
+### 5.8 共享连接
+
+上游连接信息是全局实体 connection，存在 `connections` 表：OpenAI 是 `url` + `apiKey`，Bedrock 是 `region` + `accessKeyId` + `secretAccessKey`。backend 只用 `connectionId` 引用 connection，不再内嵌凭据。任意模型的任意 backend 都可以引用同一个 connection。修改一次 connection（例如轮换 key）对所有引用它的 backend 生效；代理路径受 5.1 节缓存影响，最多 10 秒后生效。
+
+- **标识**：`id` 由用户指定，全局唯一，只能包含字母、数字、`.`、`_`、`-`。`id` 和 `provider` 创建后不可修改，只能修改该 provider 对应的配置。
+- **引用完整性**：
+  - 写入不能引入无效引用：本次新增或修改的 backend，其 `connectionId` 必须指向已存在、且 `provider` 与模型相同的 connection，否则返回 400。
+  - 未改动的 backend 不重新校验。因此，迁移遗留的、未设置 connection 的 backend 不会阻塞同一模型的其他修改，可以逐个修复或删除。
+  - 被任何 backend 引用的 connection 不能删除，返回 409，错误信息列出引用方的 `model/backendId`。
+  - 管理写入并发时这两条同样成立：backend 写入和 connection 删除各自在单条 SQL 里判断引用是否存在，不会提交悬空引用。
+- **代理路径**：配置缓存同时加载 `connections`，构造缓存时把 connection 的配置解析到 backend 上，provider 实现不需要知道 connection。引用缺失或 provider 不匹配的 backend 只可能来自绕过管理 API 导入的数据，按缺少 provider 配置处理：这次尝试失败，然后 fallback。
+- **凭据暴露范围**：模型和 backend 的管理响应只包含 `connectionId`，不再包含凭据。凭据只通过 `/admin/connections` 返回。
+- **管理 API**：
+  - `GET /admin/connections` 返回 `{ connections }`；`GET /admin/connections/:id` 返回 `{ connection }`，不存在时返回 404。
+  - `POST /admin/connections` 的请求体为 `{ id, provider, openaiConfig | bedrockConfig }`，返回 201 `{ connection }`，id 已存在时返回 409。
+  - `PUT /admin/connections/:id` 的请求体为该 provider 对应的配置字段（`{ openaiConfig }` 或 `{ bedrockConfig }`），整体替换，返回 `{ connection }`。字段与 provider 不符时返回 400，不存在时返回 404。
+  - `DELETE /admin/connections/:id`：不存在时返回 404，被引用时返回 409。
+  - connection 的响应形状与创建请求相同：`{ id, provider, openaiConfig | bedrockConfig }`。
+- **管理面板**：新增 `/connections` 页，可以增删改 connection，并显示每个 connection 被哪些 `model/backendId` 引用。添加和编辑 backend 时，从与模型 provider 相同的 connection 中选择，不再填写 URL 和凭据。backend 列表显示所用的 connection，未设置时显示为未配置。
+- **迁移已有数据**（`migrations/0002_connections.sql`）：
+  - 从所有 backend 的内嵌配置中提取 connection。provider 和各配置字段值都相同的合并为一个 connection，不受 JSON 键顺序影响。
+  - id 为 `{provider}-{n}`，例如 `openai-1`、`openai-2`、`bedrock-1`。n 在每个 provider 内从 1 开始，按首次出现的顺序编号：先按模型名升序，再按 backend 在数组中的位置。
+  - 每个 backend 写入对应的 `connectionId` 并删除内嵌配置，backend 顺序和其他字段保持不变。没有有效内嵌配置的 backend 只删除内嵌配置，不设置 `connectionId`，需要在管理面板中补选。
+  - `scripts/migrate-from-mongodb.ts` 按同样的合并和编号规则生成 connection，以及引用它们的模型。
+
 ## 6. 接口变化
 
 保留的接口及其路径、请求格式、响应形状不变：
@@ -251,13 +283,14 @@ CREATE TABLE slots (
 - `GET /admin/affinity/:model/:sessionId` 变为纯读取，不再修改访问计数。
 - `/admin/active-requests` 和 Prometheus 的 `llm_proxy_active_requests` 只包含配置了并发限制的后端，计数来自各 backend DO 的 `count()` RPC。未配置限制的后端不再统计活跃请求。
 - 后端配置新增 `recordResponses`。`/admin/recorded-requests` 的每条记录新增 `response` 字段（见 5.5），原有字段不变。
+- 新增 `/admin/connections` 的 CRUD（见 5.8）。**不兼容变更**：创建和更新 backend（包括通过模型的 `backends` 数组写入）时，用 `connectionId` 代替 `openaiConfig` / `bedrockConfig`。缺少 `connectionId` 的创建请求返回 400。模型和 backend 的响应不再包含凭据。
 
 ## 7. 部署
 
 - **绑定**：`DB`（D1）、`RECORDINGS`（R2）、`ASSETS`（静态资源，目录为 `pages/build/client`）、`CONCURRENCY`（Durable Object，类名 `BackendConcurrency`，在 wrangler migrations 中声明为 `new_sqlite_classes`）。
 - **Secret**：`ADMIN_APIKEYS`。
-- **D1 schema**：放在 `migrations/`，通过 `wrangler d1 migrations apply` 应用。
-- **从旧部署迁移**：`scripts/migrate-from-mongodb.ts` 从 MongoDB 读取 `models` 和 `apikeys`，生成可幂等执行的 SQL 文件（`INSERT OR REPLACE`），原有的 `createdAt` 和 `lastUsedAt` 都保留。生成后用 `wrangler d1 execute <db> --remote --file=...` 导入。指标、亲和映射、录制数据都是临时数据，不迁移。
+- **D1 schema**：放在 `migrations/`，通过 `wrangler d1 migrations apply` 应用。已部署的实例应用 `0002_connections.sql` 时，会把已有 backend 的内嵌配置就地转换为共享连接（见 5.8）。
+- **从旧部署迁移**：`scripts/migrate-from-mongodb.ts` 从 MongoDB 读取 `models` 和 `apikeys`，把 backend 内嵌的连接合并为 `connections`，生成可幂等执行的 SQL 文件（`INSERT OR REPLACE`），原有的 `createdAt` 和 `lastUsedAt` 都保留。生成后用 `wrangler d1 execute <db> --remote --file=...` 导入。指标、亲和映射、录制数据都是临时数据，不迁移。
 - **请求重放**：`scripts/replay.ts` 改为通过 `/admin/recorded-requests` 拉取录制数据，不再直连数据库。
 
 ## 8. 容量与成本

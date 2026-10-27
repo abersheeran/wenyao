@@ -1,7 +1,7 @@
 import { BaseProvider } from './base-provider.js'
 
 import type { StandardizedRequest } from './base-provider.js'
-import type { BackendConfig } from '../types/backend.js'
+import type { ResolvedBackendConfig as BackendConfig } from '../types/backend.js'
 import type { Context } from 'hono'
 
 export class OpenAIProvider extends BaseProvider {

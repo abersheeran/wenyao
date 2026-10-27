@@ -16,6 +16,7 @@ import {
   PROXY_KEY,
   request,
   seed,
+  seedConnections,
   upstream,
 } from './helpers.js'
 
@@ -71,6 +72,7 @@ describe('Worker entry and management authentication', () => {
 
 describe('Management CRUD persists to D1', () => {
   it('creates, lists, reads, updates and deletes a model', async () => {
+    await seedConnections()
     const config = modelConfig({
       backends: [
         createTestOpenAIBackend({ id: 'a', weight: 1 }),

@@ -1,5 +1,7 @@
+import type { UpdateConnectionInput } from '../schemas/connection.js'
 import type { ApiKey } from '../types/apikey.js'
-import type { BackendConfig, ModelConfig } from '../types/backend.js'
+import type { BackendConfig, ModelConfig, ResolvedModelConfig } from '../types/backend.js'
+import type { Connection } from '../types/connection.js'
 
 interface ApiKeyRow {
   key: string
@@ -9,8 +11,14 @@ interface ApiKeyRow {
   last_used_at: number | null
 }
 
+interface ConnectionRow {
+  id: string
+  provider: Connection['provider']
+  config: string
+}
+
 export interface ConfigSnapshot {
-  models: ModelConfig[]
+  models: ResolvedModelConfig[]
   apiKeys: ApiKey[]
 }
 
@@ -23,6 +31,16 @@ interface CachedSnapshot {
 const snapshots = new WeakMap<D1Database, CachedSnapshot>()
 const revisions = new WeakMap<D1Database, number>()
 const CACHE_TTL_MS = 10_000
+
+// Bind only changed backends and their model provider; check references atomically.
+const VALID_CONNECTIONS_SQL = `NOT EXISTS (
+  SELECT 1 FROM json_each(?) AS backend
+  WHERE NOT EXISTS (
+    SELECT 1 FROM connections
+    WHERE connections.id = json_extract(backend.value, '$.connectionId')
+      AND connections.provider = ?
+  )
+)`
 
 export class BusinessError extends Error {
   constructor(
@@ -43,6 +61,22 @@ function apiKeyFromRow(row: ApiKeyRow): ApiKey {
   }
 }
 
+function connectionFromRow(row: ConnectionRow): Connection {
+  return row.provider === 'openai'
+    ? { id: row.id, provider: row.provider, openaiConfig: JSON.parse(row.config) }
+    : { id: row.id, provider: row.provider, bedrockConfig: JSON.parse(row.config) }
+}
+
+function parseModelConfig(config: string): ModelConfig {
+  const model = JSON.parse(config) as ResolvedModelConfig
+  return {
+    ...model,
+    backends: model.backends.map(
+      ({ openaiConfig: _openai, bedrockConfig: _bedrock, ...backend }) => backend
+    ),
+  }
+}
+
 export class ConfigManager {
   constructor(private readonly db: D1Database) {}
 
@@ -57,15 +91,33 @@ export class ConfigManager {
     if (cached && cached.expiresAt > Date.now()) return cached.snapshot
     const revision = revisions.get(this.db) ?? 0
     try {
-      const [models, apiKeys] = await this.db.batch([
+      const [models, connectionRows, apiKeys] = await this.db.batch([
         this.db.prepare('SELECT config FROM models'),
+        this.db.prepare('SELECT id, provider, config FROM connections'),
         this.db.prepare('SELECT key, description, models, created_at, last_used_at FROM api_keys'),
       ])
-      const snapshot = {
-        models: (models.results as { config: string }[]).map(
-          (row) => JSON.parse(row.config) as ModelConfig
-        ),
-        apiKeys: (apiKeys.results as unknown as ApiKeyRow[]).map(apiKeyFromRow),
+      const connections = (connectionRows.results as ConnectionRow[]).map(connectionFromRow)
+      const byId = new Map(connections.map((connection) => [connection.id, connection]))
+      const snapshot: ConfigSnapshot = {
+        models: (models.results as { config: string }[]).map((row) => {
+          const model = parseModelConfig(row.config)
+          return {
+            ...model,
+            backends: model.backends.map((backend) => {
+              const connection = backend.connectionId ? byId.get(backend.connectionId) : undefined
+              if (
+                !connection ||
+                connection.provider !== model.provider ||
+                backend.provider !== model.provider
+              )
+                return backend
+              return connection.provider === 'openai'
+                ? { ...backend, openaiConfig: connection.openaiConfig }
+                : { ...backend, bedrockConfig: connection.bedrockConfig }
+            }),
+          }
+        }),
+        apiKeys: (apiKeys.results as ApiKeyRow[]).map(apiKeyFromRow),
       }
       // A management write during this read must not repopulate a stale cache.
       if ((revisions.get(this.db) ?? 0) === revision) {
@@ -81,7 +133,7 @@ export class ConfigManager {
 
   async getAllModels(): Promise<ModelConfig[]> {
     const rows = await this.db.prepare('SELECT config FROM models').all<{ config: string }>()
-    return rows.results.map((row) => JSON.parse(row.config) as ModelConfig)
+    return rows.results.map((row) => parseModelConfig(row.config))
   }
 
   async getModelConfig(model: string): Promise<ModelConfig | undefined> {
@@ -89,7 +141,7 @@ export class ConfigManager {
       .prepare('SELECT config FROM models WHERE model = ?')
       .bind(model)
       .first<{ config: string }>()
-    return row ? (JSON.parse(row.config) as ModelConfig) : undefined
+    return row ? parseModelConfig(row.config) : undefined
   }
 
   private async mutateModel(
@@ -105,16 +157,36 @@ export class ConfigManager {
       if (!row) throw new BusinessError(`Model configuration for ${model} not found`, 404)
 
       // Reapply the edit and validation to the latest document on every retry.
-      const updated = mutate(JSON.parse(row.config) as ModelConfig)
+      const config = parseModelConfig(row.config)
+      const updated = mutate(config)
       this.validateProviders(updated)
+      const previousBackends = new Map(config.backends.map((backend) => [backend.id, backend]))
+      const changedBackends = updated.backends.filter((backend) => {
+        const previous = previousBackends.get(backend.id)
+        // Backend fields are scalar; compare content independently of key/array order.
+        const fields = Object.keys(backend) as (keyof BackendConfig)[]
+        return (
+          !previous ||
+          fields.length !== Object.keys(previous).length ||
+          fields.some((field) => backend[field] !== previous[field])
+        )
+      })
+      await this.validateConnections(changedBackends, updated.provider)
       const nextConfig = JSON.stringify(updated)
       if (nextConfig === row.config) {
         this.invalidate()
         return updated
       }
       const statement = this.db
-        .prepare('UPDATE models SET config = ? WHERE model = ? AND config = ?')
-        .bind(nextConfig, model, row.config)
+        .prepare(
+          `UPDATE models SET config = ? WHERE model = ? AND config = ?${changedBackends.length ? ` AND ${VALID_CONNECTIONS_SQL}` : ''}`
+        )
+        .bind(
+          nextConfig,
+          model,
+          row.config,
+          ...(changedBackends.length ? [JSON.stringify(changedBackends), updated.provider] : [])
+        )
       const result =
         deletedBackendId === undefined
           ? await statement.run()
@@ -142,7 +214,7 @@ export class ConfigManager {
     for (const backend of config.backends) {
       if (backend.provider !== config.provider) {
         throw new BusinessError(
-          `Backend provider '${backend.provider}' does not match model provider '${config.provider}'`,
+          `Backend '${backend.id}' provider '${backend.provider}' does not match model provider '${config.provider}'`,
           400
         )
       }
@@ -153,17 +225,55 @@ export class ConfigManager {
     }
   }
 
+  private async validateConnections(
+    backends: BackendConfig[],
+    provider: ModelConfig['provider']
+  ): Promise<void> {
+    if (!backends.length) return
+    const rows = await this.db
+      .prepare(
+        `SELECT id, provider FROM connections WHERE id IN (
+          SELECT json_extract(value, '$.connectionId') FROM json_each(?)
+        )`
+      )
+      .bind(JSON.stringify(backends))
+      .all<Pick<ConnectionRow, 'id' | 'provider'>>()
+    const connections = new Map(rows.results.map((connection) => [connection.id, connection]))
+    for (const backend of backends) {
+      const connection = backend.connectionId ? connections.get(backend.connectionId) : undefined
+      if (!connection || connection.provider !== provider) {
+        throw new BusinessError(
+          `Backend '${backend.id}' connection '${backend.connectionId ?? ''}' ${connection ? `provider '${connection.provider}' does not match model provider '${provider}'` : 'does not exist'}`,
+          400
+        )
+      }
+    }
+  }
+
   async addModelConfig(config: ModelConfig): Promise<ModelConfig> {
     this.validateProviders(config)
-    const result = await this.db
-      .prepare('INSERT OR IGNORE INTO models (model, config) VALUES (?, ?)')
-      .bind(config.model, JSON.stringify(config))
-      .run()
-    if (!result.meta.changes) {
-      throw new BusinessError(`Model configuration for ${config.model} already exists`, 409)
+    const nextConfig = JSON.stringify(config)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await this.validateConnections(config.backends, config.provider)
+      const result = await this.db
+        .prepare(
+          `INSERT OR IGNORE INTO models (model, config) SELECT ?, ?${config.backends.length ? ` WHERE ${VALID_CONNECTIONS_SQL}` : ''}`
+        )
+        .bind(
+          config.model,
+          nextConfig,
+          ...(config.backends.length ? [JSON.stringify(config.backends), config.provider] : [])
+        )
+        .run()
+      if (result.meta.changes) {
+        this.invalidate()
+        return config
+      }
+      if (await this.getModelConfig(config.model)) {
+        throw new BusinessError(`Model configuration for ${config.model} already exists`, 409)
+      }
     }
-    this.invalidate()
-    return config
+    throw new BusinessError(`Model configuration for ${config.model} changed concurrently`, 409)
   }
 
   async updateModelConfig(
@@ -230,6 +340,96 @@ export class ConfigManager {
         }
       },
       backendId
+    )
+  }
+
+  async getAllConnections(): Promise<Connection[]> {
+    const rows = await this.db
+      .prepare('SELECT id, provider, config FROM connections ORDER BY id')
+      .all<ConnectionRow>()
+    return rows.results.map(connectionFromRow)
+  }
+
+  async getConnection(id: string): Promise<Connection | undefined> {
+    const row = await this.db
+      .prepare('SELECT id, provider, config FROM connections WHERE id = ?')
+      .bind(id)
+      .first<ConnectionRow>()
+    return row ? connectionFromRow(row) : undefined
+  }
+
+  async addConnection(connection: Connection): Promise<Connection> {
+    const config =
+      connection.provider === 'openai' ? connection.openaiConfig : connection.bedrockConfig
+    const result = await this.db
+      .prepare('INSERT OR IGNORE INTO connections (id, provider, config) VALUES (?, ?, ?)')
+      .bind(connection.id, connection.provider, JSON.stringify(config))
+      .run()
+    if (!result.meta.changes)
+      throw new BusinessError(`Connection '${connection.id}' already exists`, 409)
+    this.invalidate()
+    return connection
+  }
+
+  async updateConnection(id: string, updates: UpdateConnectionInput): Promise<Connection> {
+    const connection = await this.getConnection(id)
+    if (!connection) throw new BusinessError(`Connection '${id}' not found`, 404)
+    const config =
+      connection.provider === 'openai'
+        ? 'openaiConfig' in updates
+          ? updates.openaiConfig
+          : undefined
+        : 'bedrockConfig' in updates
+          ? updates.bedrockConfig
+          : undefined
+    if (!config) {
+      throw new BusinessError(
+        `Configuration does not match connection '${id}' provider '${connection.provider}'`,
+        400
+      )
+    }
+    const row = await this.db
+      .prepare(
+        'UPDATE connections SET config = ? WHERE id = ? AND provider = ? RETURNING id, provider, config'
+      )
+      .bind(JSON.stringify(config), id, connection.provider)
+      .first<ConnectionRow>()
+    if (!row) throw new BusinessError(`Connection '${id}' not found`, 404)
+    this.invalidate()
+    return connectionFromRow(row)
+  }
+
+  async deleteConnection(id: string): Promise<void> {
+    // Read failure details in the same transaction so concurrent unlinking cannot
+    // erase the references that made the conditional DELETE fail.
+    const [result, existing, references] = await this.db.batch([
+      this.db
+        .prepare(
+          `DELETE FROM connections WHERE id = ? AND NOT EXISTS (
+        SELECT 1 FROM models, json_each(models.config, '$.backends') AS backend
+        WHERE json_extract(backend.value, '$.connectionId') = connections.id
+      )`
+        )
+        .bind(id),
+      this.db.prepare('SELECT id FROM connections WHERE id = ?').bind(id),
+      this.db
+        .prepare(
+          `SELECT models.model AS model, json_extract(backend.value, '$.id') AS backendId
+        FROM models, json_each(models.config, '$.backends') AS backend
+        WHERE json_extract(backend.value, '$.connectionId') = ?
+        ORDER BY models.model, CAST(backend.key AS INTEGER)`
+        )
+        .bind(id),
+    ])
+    if (result.meta.changes) {
+      this.invalidate()
+      return
+    }
+    if (!existing.results.length) throw new BusinessError(`Connection '${id}' not found`, 404)
+    const referencedBy = references.results as { model: string; backendId: string }[]
+    throw new BusinessError(
+      `Connection '${id}' is referenced by ${referencedBy.map((reference) => `${reference.model}/${reference.backendId}`).join(', ')}`,
+      409
     )
   }
 

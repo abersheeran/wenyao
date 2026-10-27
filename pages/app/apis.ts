@@ -11,8 +11,14 @@ export type BedrockConfig = {
   region: string;
   accessKeyId: string;
   secretAccessKey: string;
-  sessionToken?: string;
 };
+
+export type Connection = { id: string } & (
+  | { provider: 'openai'; openaiConfig: OpenAIConfig }
+  | { provider: 'bedrock'; bedrockConfig: BedrockConfig }
+);
+
+export type ConnectionConfig = { openaiConfig: OpenAIConfig } | { bedrockConfig: BedrockConfig };
 
 export type BackendConfig = {
   id: string;
@@ -25,8 +31,7 @@ export type BackendConfig = {
   recordRequests?: boolean; // Optional: Record all requests (URL, headers, body) to D1 and R2
   recordResponses?: boolean; // Optional: Record responses when request recording is enabled
   maxConcurrentRequests?: number; // Optional: Maximum concurrent requests (undefined/0 = no limit, >0 = specific limit)
-  openaiConfig?: OpenAIConfig;
-  bedrockConfig?: BedrockConfig;
+  connectionId: string;
 };
 
 export type MinErrorRateOptions = {
@@ -138,6 +143,66 @@ export function useAdminApi() {
   const apiBase = (import.meta as any).env?.VITE_API_BASE ?? "";
   const base = apiBase ? `${String(apiBase).replace(/\/$/, "")}/admin` : "/admin";
   return {
+    // Shared connection operations
+    async listConnections(): Promise<Connection[]> {
+      const res = await fetch(`${base}/connections`, {
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to load connections");
+      }
+      const data = await res.json();
+      return data.connections ?? [];
+    },
+    async getConnection(id: string): Promise<Connection> {
+      const res = await fetch(`${base}/connections/${encodeURIComponent(id)}`, {
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to load connection");
+      }
+      const data = await res.json();
+      return data.connection;
+    },
+    async createConnection(payload: Connection): Promise<Connection> {
+      const res = await fetch(`${base}/connections`, {
+        method: "POST",
+        headers: createAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to create connection");
+      }
+      const data = await res.json();
+      return data.connection;
+    },
+    async updateConnection(id: string, config: ConnectionConfig): Promise<Connection> {
+      const res = await fetch(`${base}/connections/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: createAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(config),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to update connection");
+      }
+      const data = await res.json();
+      return data.connection;
+    },
+    async deleteConnection(id: string): Promise<void> {
+      const res = await fetch(`${base}/connections/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: createAuthHeaders()
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to delete connection");
+      }
+    },
+
     // Model-level operations
     async listModels(): Promise<(ModelConfig & { backends: (BackendConfig & { trafficRatio: number })[] })[]> {
       const res = await fetch(`${base}/models`, {

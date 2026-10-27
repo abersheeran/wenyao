@@ -17,6 +17,7 @@ export function DeleteConfirmationDialog({
   expectedInput,
   onConfirm,
   isDeleting,
+  error,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -25,6 +26,7 @@ export function DeleteConfirmationDialog({
   expectedInput: string;
   onConfirm: () => void;
   isDeleting?: boolean;
+  error?: string;
 }) {
   const [inputValue, setInputValue] = React.useState("");
 
@@ -38,7 +40,7 @@ export function DeleteConfirmationDialog({
   const isValid = inputValue === expectedInput;
 
   const handleConfirm = () => {
-    if (isValid) {
+    if (isValid && !isDeleting) {
       onConfirm();
     }
   };
@@ -57,6 +59,7 @@ export function DeleteConfirmationDialog({
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
           <div>
             <label className="text-sm font-medium text-gray-700 mb-2 block">
               Please type <span className="font-mono bg-gray-100 px-1 py-0.5 rounded">{expectedInput}</span> to confirm:

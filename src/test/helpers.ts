@@ -16,7 +16,7 @@ export function createTestOpenAIBackend(overrides: Partial<BackendConfig> = {}):
     provider: 'openai',
     enabled: true,
     weight: 1,
-    openaiConfig: { url: 'https://b1.example', apiKey: 'upstream-secret' },
+    connectionId: 'openai-test',
     ...overrides,
   }
 }
@@ -27,11 +27,7 @@ export function createTestBedrockBackend(overrides: Partial<BackendConfig> = {})
     provider: 'bedrock',
     enabled: true,
     weight: 1,
-    bedrockConfig: {
-      region: 'us-east-1',
-      accessKeyId: 'test-access-key',
-      secretAccessKey: 'test-secret-key',
-    },
+    connectionId: 'bedrock-test',
     ...overrides,
   }
 }
@@ -71,7 +67,34 @@ export function admin(path: string, method = 'GET', body?: unknown): Promise<Res
   })
 }
 
+export async function seedConnections(): Promise<void> {
+  for (const connection of [
+    {
+      id: 'openai-test',
+      provider: 'openai',
+      openaiConfig: { url: 'https://b1.example', apiKey: 'upstream-secret' },
+    },
+    {
+      id: 'openai-second',
+      provider: 'openai',
+      openaiConfig: { url: 'https://b2.example', apiKey: 'second-secret' },
+    },
+    {
+      id: 'bedrock-test',
+      provider: 'bedrock',
+      bedrockConfig: {
+        region: 'us-east-1',
+        accessKeyId: 'test-access-key',
+        secretAccessKey: 'test-secret-key',
+      },
+    },
+  ]) {
+    expect((await admin('/connections', 'POST', connection)).status).toBe(201)
+  }
+}
+
 export async function seed(config = modelConfig(), models = [config.model]): Promise<void> {
+  await seedConnections()
   expect((await admin('/models', 'POST', config)).status).toBe(201)
   expect(
     (

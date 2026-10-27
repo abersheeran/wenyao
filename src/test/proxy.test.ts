@@ -29,7 +29,7 @@ function twoBackends() {
     createTestOpenAIBackend(),
     createTestOpenAIBackend({
       id: 'b2',
-      openaiConfig: { url: 'https://b2.example', apiKey: 'second-secret' },
+      connectionId: 'openai-second',
     }),
   ]
 }

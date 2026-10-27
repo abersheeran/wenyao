@@ -2,7 +2,7 @@
 
 文鳐（Wenyao）是一个 OpenAI / AWS Bedrock 的 LLM 代理和负载均衡器，只运行在 Cloudflare Workers 上。Hono 提供代理和管理 API，D1 保存配置、分钟指标、会话亲和及录制元数据，R2 保存录制的请求体和响应体，Durable Objects 的内置 SQLite 保存受限后端的并发名额。React Router SPA 与 API 由同一个 Worker 托管。
 
-支持 `weighted`、`lowest-ttft` 和 `min-error-rate` 三种负载均衡策略、失败回退、TTFT 超时、会话亲和、全局后端并发限制、请求与响应录制和 Prometheus 指标。管理面板的路由为 `/`、`/apikeys`、`/affinity`、`/stats`、`/metrics`。
+支持 `weighted`、`lowest-ttft` 和 `min-error-rate` 三种负载均衡策略、失败回退、TTFT 超时、会话亲和、全局后端并发限制、请求与响应录制和 Prometheus 指标。管理面板的路由为 `/`、`/connections`、`/apikeys`、`/affinity`、`/stats`、`/metrics`。
 
 产品定义和存储结构见 [Workers 架构设计](docs/cloudflare-workers.md)。
 
@@ -36,7 +36,7 @@ npm run build
 npx wrangler deploy
 ```
 
-`ADMIN_APIKEYS` 是逗号分隔的管理 key。管理 API 使用 `Authorization: Bearer <key>`，未配置时返回 503，key 缺失或无效时返回 401。首次部署后通过管理面板创建模型、后端和代理 API key，代理请求使用单独的代理 key。
+`ADMIN_APIKEYS` 是逗号分隔的管理 key。管理 API 使用 `Authorization: Bearer <key>`，未配置时返回 503，key 缺失或无效时返回 401。首次部署后先在管理面板创建连接，再创建模型和引用连接的后端，最后创建代理 API key；代理请求使用单独的代理 key。
 
 `npm run deploy` 等价于构建前端后发布。CI 只执行本地检查和 `wrangler deploy --dry-run`，不会自动部署。D1、R2、静态资源 `ASSETS`、Durable Object `CONCURRENCY`（`BackendConcurrency` 类）和每 5 分钟执行一次的 Cron 已在 `wrangler.jsonc` 配置。DO 的 SQLite migration 随 Worker 部署应用，无需单独创建实例。
 
@@ -66,6 +66,7 @@ curl -H 'Authorization: Bearer <管理key>' http://localhost:8787/admin/models
 ```bash
 npm run typecheck
 npm run lint:check
+npm run format:check
 npm test
 npm --prefix pages run typecheck
 npm --prefix pages run build
@@ -82,7 +83,7 @@ npx wrangler deploy --dry-run
 MONGODB_URL='mongodb://localhost:27017/wenyao' npm run migrate:mongodb -- wenyao.migration.sql
 ```
 
-脚本生成可重复导入的 `INSERT OR REPLACE` SQL。字符串中的引号、换行、Unicode 和 NUL 都会被保留。较大记录通过辅助分片表重建，每条 SQL 小于 100 KB，导入结束后删除辅助表；D1 单行仍受 2 MB 上限约束。生成过程中失败不会留下新的部分 SQL 文件。导出文件含后端凭据和 API key，应按密钥文件保存。
+脚本按 provider 和连接配置合并生成共享 `connections`，模型中的 backend 改用 `connectionId` 引用，并生成可重复导入的 `INSERT OR REPLACE` SQL。字符串中的引号、换行、Unicode 和 NUL 都会被保留。较大记录通过辅助分片表重建，每条 SQL 小于 100 KB，导入结束后删除辅助表；D1 单行仍受 2 MB 上限约束。生成过程中失败不会留下新的部分 SQL 文件。导出文件含后端凭据和 API key，应按密钥文件保存。
 
 先应用 schema，再导入 SQL。可先在本地检查：
 
@@ -98,7 +99,7 @@ npm run db:migrate:remote
 npx wrangler d1 execute wenyao --remote --file=wenyao.migration.sql
 ```
 
-`INSERT OR REPLACE` 会以旧库导出值覆盖同名模型或同 key 的配置。迁移完成后，运行服务只使用 Workers 的 D1、R2 和 DO；MongoDB 驱动仅作为一次性迁移工具的开发依赖。
+`INSERT OR REPLACE` 会以旧库导出值覆盖同名模型、同 id 的 connection 或同 key 的配置。迁移完成后，运行服务只使用 Workers 的 D1、R2 和 DO；MongoDB 驱动仅作为一次性迁移工具的开发依赖。
 
 ## 请求重放
 
@@ -113,7 +114,9 @@ ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
 
 ## 限制与行为
 
-- 配置和代理 API key 在每个 isolate 内缓存 10 秒；其他 isolate 最多 10 秒后看到变更。管理 API 直接读写 D1，写入后立即使当前 isolate 的配置缓存失效。
+- 模型、connection 和代理 API key 在每个 isolate 内缓存 10 秒；connection 修改（包括轮换凭据）对所有引用它的 backend 生效，其他 isolate 最多 10 秒后看到变更。管理 API 直接读写 D1，写入后立即使当前 isolate 的配置缓存失效。
+- backend 写入改用 `connectionId`，不再接受内嵌 `openaiConfig` / `bedrockConfig`，属于不兼容变更。模型和后端的管理响应不再包含凭据；凭据只通过 `/admin/connections` 返回。connection 的 provider 必须与模型一致，被引用时删除返回 409，并列出 `model/backendId`。
+- 已部署实例应用 `0002_connections.sql` 时会自动合并已有内嵌连接并转换 backend；缺少有效内嵌配置的 backend 需要在管理面板中补选连接。
 - `ADMIN_APIKEYS` 必须配置。代理 key 缺失或无效返回 401，无权访问模型返回 403。代理 key 的 `lastUsedAt` 在同一 isolate 内最多每 60 秒写入一次。
 - 指标始终开启，按分钟汇总，保存 30 天。查询包含与时间窗口相交的分钟桶，因此不足一分钟的窗口仍可能包含整分钟的计数；TTFT 按流式、非流式分别使用 `sum / count`。负载均衡统计缓存 15 秒。
 - 只有配置了 `maxConcurrentRequests > 0` 的后端才使用并发限制，每个后端一个 DO。每次尝试通过 `acquire`、`release` 两次 RPC 抢占和释放名额；DO 使用内置 SQLite 持久化，休眠或重启不会丢失计数，超过 30 分钟的名额在 `acquire` / `count` 时清理。DO 调用异常时记录日志并放行。长于 30 分钟的请求不再占用有效并发名额。

@@ -21,6 +21,7 @@ export interface OpenAIConfig {
 export interface BackendConfig {
   id: string
   provider: ProviderType
+  connectionId?: string // Migrated backends may need a connection selected before editing.
   weight: number
   enabled: boolean
   model?: string // Optional: Override the model name when forwarding to this backend
@@ -29,8 +30,10 @@ export interface BackendConfig {
   recordRequests?: boolean // Optional: Record request metadata in D1 and body in R2
   recordResponses?: boolean // Optional: Record responses when request recording is enabled
   maxConcurrentRequests?: number // Optional: Maximum concurrent requests (undefined/0 = no limit, >0 = specific limit)
+}
 
-  // Provider-specific configurations (one of these must be present based on provider type)
+// Provider configurations are resolved only when constructing the proxy snapshot.
+export interface ResolvedBackendConfig extends BackendConfig {
   openaiConfig?: OpenAIConfig
   bedrockConfig?: BedrockConfig
 }
@@ -65,6 +68,10 @@ export interface ModelConfig {
   loadBalancingStrategy: LoadBalancingStrategy // Strategy for selecting backends
   minErrorRateOptions?: MinErrorRateOptions // Options for min-error-rate strategy
   enableAffinity?: boolean // Enable session-based backend affinity for KV cache reuse
+}
+
+export interface ResolvedModelConfig extends ModelConfig {
+  backends: ResolvedBackendConfig[]
 }
 
 // Statistics for each backend

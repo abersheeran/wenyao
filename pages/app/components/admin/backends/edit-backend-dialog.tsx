@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Link } from "react-router";
 import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
 import Input from "../../ui/input";
@@ -9,14 +10,16 @@ import {
   DialogTitle,
 } from "../../ui/dialog";
 import { Switch } from "../../ui/switch";
-import { useAdminApi, type BackendConfig } from "~/apis";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
+import { useAdminApi, type BackendConfig, type Connection } from "~/apis";
 import { getProviderDisplayName } from "../../../config/provider-config";
 
-export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved }: {
+export function EditBackendDialog({ open, onOpenChange, model, backend, connections, onSaved }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   model: string | null;
   backend: BackendConfig | null;
+  connections: Connection[];
   onSaved: () => void;
 }) {
   const api = useAdminApi();
@@ -28,8 +31,8 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
 
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!model || !form) return;
-    await api.updateBackend(model, form.id, {
+    if (!model || !form || !connections.some(connection => connection.id === form.connectionId)) return;
+    const updates = {
       provider: form.provider,
       weight: form.weight,
       enabled: form.enabled,
@@ -39,11 +42,11 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
       recordRequests: form.recordRequests,
       recordResponses: form.recordResponses,
       maxConcurrentRequests: form.maxConcurrentRequests,
-      openaiConfig: form.openaiConfig,
-      bedrockConfig: form.bedrockConfig
-    });
+      connectionId: form.connectionId
+    };
+    await api.updateBackend(model, form.id, updates);
     onSaved();
-  }, [api, model, form, onSaved]);
+  }, [api, model, connections, form, onSaved]);
 
   if (!form || !model) return null;
 
@@ -68,61 +71,29 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
           <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
             <h4 className="text-sm font-medium text-gray-700">Backend 配置 ({getProviderDisplayName(form.provider)})</h4>
 
-            {form.provider === "openai" && form.openaiConfig && (
-              <>
-                <div>
-                  <label className="block text-sm mb-1">URL</label>
-                  <Input
-                    required
-                    value={form.openaiConfig.url}
-                    onChange={(e) => setForm({ ...form, openaiConfig: { ...form.openaiConfig!, url: e.target.value } })}
-                    placeholder="https://api.openai.com"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm mb-1">API Key</label>
-                  <Input
-                    required
-                    value={form.openaiConfig.apiKey}
-                    onChange={(e) => setForm({ ...form, openaiConfig: { ...form.openaiConfig!, apiKey: e.target.value } })}
-                    placeholder="sk-..."
-                  />
-                </div>
-              </>
-            )}
-
-            {form.provider === "bedrock" && form.bedrockConfig && (
-              <>
-                <div>
-                  <label className="block text-sm mb-1">AWS Region</label>
-                  <Input
-                    required
-                    value={form.bedrockConfig.region}
-                    onChange={(e) => setForm({ ...form, bedrockConfig: { ...form.bedrockConfig!, region: e.target.value } })}
-                    placeholder="us-east-1"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm mb-1">Access Key ID</label>
-                  <Input
-                    required
-                    value={form.bedrockConfig.accessKeyId}
-                    onChange={(e) => setForm({ ...form, bedrockConfig: { ...form.bedrockConfig!, accessKeyId: e.target.value } })}
-                    placeholder="AKIAIOSFODNN7EXAMPLE"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm mb-1">Secret Access Key</label>
-                  <Input
-                    required
-                    type="password"
-                    value={form.bedrockConfig.secretAccessKey}
-                    onChange={(e) => setForm({ ...form, bedrockConfig: { ...form.bedrockConfig!, secretAccessKey: e.target.value } })}
-                    placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-                  />
-                </div>
-              </>
-            )}
+            <div>
+              <label htmlFor="backend-connection-edit" className="block text-sm mb-1">Connection</label>
+              {connections.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  No connections available for this provider. <Link to="/connections" className="text-blue-600 underline">Create a connection</Link> first.
+                </p>
+              ) : (
+                <Select
+                  value={connections.some(connection => connection.id === form.connectionId) ? form.connectionId : ""}
+                  onValueChange={(connectionId) => setForm({ ...form, connectionId })}
+                  required
+                >
+                  <SelectTrigger id="backend-connection-edit" className="w-full">
+                    <SelectValue placeholder="Select a connection" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {connections.map((connection) => (
+                      <SelectItem key={connection.id} value={connection.id}>{connection.id}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
 
             <div>
               <label className="block text-sm mb-1">Model (可选)</label>
@@ -250,7 +221,7 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, onSaved 
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={submitState.loading}>
+            <Button type="submit" disabled={submitState.loading || !connections.some(connection => connection.id === form.connectionId)}>
               {submitState.loading ? "Saving..." : "Save"}
             </Button>
           </div>

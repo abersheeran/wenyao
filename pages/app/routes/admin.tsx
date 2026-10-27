@@ -33,6 +33,7 @@ export default function Admin() {
   const getCurrentTab = () => {
     const path = location.pathname;
     if (path === "/" || path === "") return "backends";
+    if (path.includes("/connections")) return "connections";
     if (path.includes("/apikeys")) return "apikeys";
     if (path.includes("/affinity")) return "affinity";
     if (path.includes("/stats")) return "stats";
@@ -70,6 +71,7 @@ export default function Admin() {
 
   const tabOptions = [
     { value: "backends", label: "Backends", path: "/" },
+    { value: "connections", label: "Connections", path: "/connections" },
     { value: "apikeys", label: "API Keys", path: "/apikeys" },
     { value: "affinity", label: "Affinity", path: "/affinity" },
     { value: "stats", label: "Stats", path: "/stats" },

@@ -166,7 +166,7 @@ describe('Response recording', () => {
           recordingBackend(),
           recordingBackend({
             id: 'b2',
-            openaiConfig: { url: 'https://b2.example', apiKey: 'other' },
+            connectionId: 'openai-second',
           }),
         ],
       })
@@ -525,7 +525,7 @@ describe('Response recording', () => {
           recordingBackend(),
           recordingBackend({
             id: 'b2',
-            openaiConfig: { url: 'https://b2.example', apiKey: 'other' },
+            connectionId: 'openai-second',
           }),
         ],
       })

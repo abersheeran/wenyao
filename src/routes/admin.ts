@@ -13,6 +13,11 @@ import {
   updateBackendInModelSchema,
   updateModelConfigSchema,
 } from '../schemas/backend.js'
+import {
+  connectionParamSchema,
+  createConnectionSchema,
+  updateConnectionSchema,
+} from '../schemas/connection.js'
 import { recordedRequestsQuerySchema } from '../schemas/recorded-requests.js'
 import { AffinityManager } from '../services/affinity-manager.js'
 import { ConcurrencyLimiter } from '../services/concurrency-limiter.js'
@@ -43,6 +48,41 @@ function withTrafficRatio(model: ModelConfig) {
     })),
   }
 }
+
+admin.get('/connections', async (c) => {
+  const connections = await new ConfigManager(c.env.DB).getAllConnections()
+  return c.json({ connections })
+})
+
+admin.get('/connections/:id', zValidator('param', connectionParamSchema), async (c) => {
+  const { id } = c.req.valid('param')
+  const connection = await new ConfigManager(c.env.DB).getConnection(id)
+  if (!connection) return c.json({ error: `Connection '${id}' not found` }, 404)
+  return c.json({ connection })
+})
+
+admin.post('/connections', zValidator('json', createConnectionSchema), async (c) => {
+  const connection = await new ConfigManager(c.env.DB).addConnection(c.req.valid('json'))
+  return c.json({ connection }, 201)
+})
+
+admin.put(
+  '/connections/:id',
+  zValidator('param', connectionParamSchema),
+  zValidator('json', updateConnectionSchema),
+  async (c) => {
+    const connection = await new ConfigManager(c.env.DB).updateConnection(
+      c.req.valid('param').id,
+      c.req.valid('json')
+    )
+    return c.json({ connection })
+  }
+)
+
+admin.delete('/connections/:id', zValidator('param', connectionParamSchema), async (c) => {
+  await new ConfigManager(c.env.DB).deleteConnection(c.req.valid('param').id)
+  return c.json({ message: 'Connection deleted successfully' })
+})
 
 admin.get('/models', async (c) => {
   const models = await new ConfigManager(c.env.DB).getAllModels()
