@@ -1,6 +1,6 @@
 # 文鳐
 
-文鳐（Wenyao）是一个 OpenAI / AWS Bedrock 的 LLM 代理和负载均衡器，只运行在 Cloudflare Workers 上。Hono 提供代理和管理 API，D1 保存配置、分钟指标、会话亲和及录制元数据，R2 保存录制的请求体和响应体，Durable Objects 的内置 SQLite 保存受限后端的并发名额。React Router SPA 与 API 由同一个 Worker 托管。
+文鳐（Wenyao）是一个 OpenAI / AWS Bedrock / Jev 的 API 代理和负载均衡器，只运行在 Cloudflare Workers 上。Hono 提供代理和管理 API，D1 保存配置、分钟指标、会话亲和及录制元数据，R2 保存录制的请求体和响应体，Durable Objects 的内置 SQLite 保存受限后端的并发名额。React Router SPA 与 API 由同一个 Worker 托管。
 
 支持 `weighted`、`lowest-ttft` 和 `min-error-rate` 三种负载均衡策略、失败回退、TTFT 超时、会话亲和、全局后端并发限制、请求与响应录制和 Prometheus 指标。管理面板的路由为 `/`、`/connections`、`/apikeys`、`/affinity`、`/stats`、`/metrics`。
 
@@ -101,6 +101,19 @@ npx wrangler d1 execute wenyao --remote --file=wenyao.migration.sql
 
 `INSERT OR REPLACE` 会以旧库导出值覆盖同名模型、同 id 的 connection 或同 key 的配置。迁移完成后，运行服务只使用 Workers 的 D1、R2 和 DO；MongoDB 驱动仅作为一次性迁移工具的开发依赖。
 
+## System One API（Jev）
+
+路由为 `POST /v1/systemone`，接受官方格式的 JSON、gzip / zstd 压缩请求和 multipart 图片。先创建 Jev connection：使用 TypeSafe 时，URL 设为 `https://api.typesafe.ai`，API key 使用 TypeSafe key；使用 OpenRouter 时，URL 设为 `https://openrouter.ai/api/`，API key 使用 OpenRouter key。OpenRouter URL 末尾的 `/` 不能省略，与聊天接口的相对路径解析规则相同。
+
+再创建 provider 为 `jev` 的模型，名称与客户端请求一致（如 `jev-latest`），后端引用该 Jev connection。同一个 OpenRouter key 同时用于聊天和 Jev 时，需要分别创建一个 OpenAI connection 和一个 Jev connection。
+
+官方 SDK 的 `baseURL`（或环境变量 `TYPESAFE_BASE_URL`）设为文鳐的地址，`TYPESAFE_API_KEY` 设为代理 key。请求始终按非流式处理，即使请求体含 `stream: true`；不提供 `GET /v1/models`。录制的请求已还原为 JSON、图片内嵌为 base64，可直接指定目标路由和对应后端 id 重放（下例为 `jev-backend`）：
+
+```bash
+ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
+  npm run replay -- http://localhost:8787/v1/systemone jev-backend 10 1
+```
+
 ## 请求重放
 
 重放工具通过管理 API 拉取录制数据，需要管理 key 和代理 key。默认管理 API 与目标地址同源；`ADMIN_URL` 可以指定独立的管理服务地址。
@@ -115,7 +128,7 @@ ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
 ## 限制与行为
 
 - 模型、connection 和代理 API key 在每个 isolate 内缓存 10 秒；connection 修改（包括轮换凭据）对所有引用它的 backend 生效，其他 isolate 最多 10 秒后看到变更。管理 API 直接读写 D1，写入后立即使当前 isolate 的配置缓存失效。
-- backend 写入改用 `connectionId`，不再接受内嵌 `openaiConfig` / `bedrockConfig`，属于不兼容变更。模型和后端的管理响应不再包含凭据；凭据只通过 `/admin/connections` 返回。connection 可设置并修改显示名称，provider 必须与模型一致，被引用时删除返回 409，并列出 `model/backendId`。
+- backend 写入使用 `connectionId`，不接受内嵌 `openaiConfig` / `bedrockConfig` / `jevConfig`。模型和后端的管理响应不包含凭据；凭据只通过 `/admin/connections` 返回。connection 可设置并修改显示名称，provider（`openai` / `bedrock` / `jev`）必须与模型一致，被引用时删除返回 409，并列出 `model/backendId`。
 - 已部署实例应用 `0002_connections.sql` 时会自动合并已有内嵌连接并转换 backend；缺少有效内嵌配置的 backend 需要在管理面板中补选连接。
 - `ADMIN_APIKEYS` 必须配置。代理 key 缺失或无效返回 401，无权访问模型返回 403。代理 key 的 `lastUsedAt` 在同一 isolate 内最多每 60 秒写入一次。
 - 指标始终开启，按分钟汇总，保存 30 天。查询包含与时间窗口相交的分钟桶，因此不足一分钟的窗口仍可能包含整分钟的计数；TTFT 按流式、非流式分别使用 `sum / count`。负载均衡统计缓存 15 秒。

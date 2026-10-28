@@ -12,7 +12,7 @@ import {
 import { Switch } from "../../ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { useAdminApi, type BackendConfig, type Connection } from "~/apis";
-import { getProviderDisplayName } from "../../../config/provider-config";
+import { getConnectionConfigDisplay, getProviderDisplayName } from "../../../config/provider-config";
 
 export function EditBackendDialog({ open, onOpenChange, model, backend, connections, onSaved }: {
   open: boolean;
@@ -91,7 +91,7 @@ export function EditBackendDialog({ open, onOpenChange, model, backend, connecti
                       <SelectItem
                         key={connection.id}
                         value={connection.id}
-                        description={`${connection.id} · ${connection.provider === 'openai' ? connection.openaiConfig.url : connection.bedrockConfig.region}`}
+                        description={`${connection.id} · ${getConnectionConfigDisplay(connection)}`}
                       >
                         {connection.name || connection.id}
                       </SelectItem>

@@ -18,6 +18,17 @@ const bedrock: Connection = {
   provider: 'bedrock',
   bedrockConfig: { region: 'us-east-1', accessKeyId: 'access', secretAccessKey: 'secret' },
 }
+const jev: Connection = {
+  id: 'jev',
+  name: '',
+  provider: 'jev',
+  jevConfig: { url: 'https://api.typesafe.ai', apiKey: 'jev-secret' },
+}
+
+function configuration(connection: Connection) {
+  const { id: _id, name: _name, provider: _provider, ...config } = connection
+  return config
+}
 
 async function error(response: Response, status: number): Promise<string> {
   expect(response.status).toBe(status)
@@ -99,12 +110,14 @@ describe('Shared connections management', () => {
     expect((await admin('/connections', 'POST', { ...bedrock, name: 'Shared' })).status).toBe(201)
   })
 
-  it('creates, lists, reads, replaces and deletes both provider configurations', async () => {
+  it('creates, lists, reads, replaces and deletes all provider configurations', async () => {
     expect((await admin('/connections', 'POST', openai)).status).toBe(201)
     expect((await admin('/connections', 'POST', bedrock)).status).toBe(201)
+    expect((await admin('/connections', 'POST', jev)).status).toBe(201)
     const listed = (await (await admin('/connections')).json()) as { connections: Connection[] }
-    expect(listed.connections).toEqual([bedrock, openai])
+    expect(listed.connections).toEqual([bedrock, jev, openai])
     expect(await (await admin('/connections/shared')).json()).toEqual({ connection: openai })
+    expect(await (await admin('/connections/jev')).json()).toEqual({ connection: jev })
     const replacement = { url: 'https://replacement.example', apiKey: 'rotated-secret' }
     const changed = await admin('/connections/shared', 'PUT', { openaiConfig: replacement })
     expect(changed.status).toBe(200)
@@ -122,12 +135,19 @@ describe('Shared connections management', () => {
     expect(
       await (await admin('/connections/aws', 'PUT', { bedrockConfig: newBedrock })).json()
     ).toEqual({ connection: { ...bedrock, bedrockConfig: newBedrock } })
+    const changedJev = await admin('/connections/jev', 'PUT', { jevConfig: replacement })
+    expect(changedJev.status).toBe(200)
+    expect(await changedJev.json()).toEqual({ connection: { ...jev, jevConfig: replacement } })
+    expect(await (await admin('/connections/jev')).json()).toEqual({
+      connection: { ...jev, jevConfig: replacement },
+    })
     expect((await admin('/connections/shared', 'DELETE')).status).toBe(200)
     expect((await admin('/connections/aws', 'DELETE')).status).toBe(200)
+    expect((await admin('/connections/jev', 'DELETE')).status).toBe(200)
     expect(await (await admin('/connections')).json()).toEqual({ connections: [] })
   })
 
-  it.each([openai, bedrock])(
+  it.each([openai, bedrock, jev])(
     'updates only supplied name and configuration fields for $provider',
     async (connection) => {
       const path = `/connections/${connection.id}`
@@ -141,13 +161,18 @@ describe('Shared connections management', () => {
       expect(await (await admin(path)).json()).toEqual({ connection: renamed })
 
       const replacement =
-        connection.provider === 'openai'
-          ? { openaiConfig: { url: 'https://replacement.example', apiKey: 'replacement-secret' } }
-          : {
+        connection.provider === 'bedrock'
+          ? {
               bedrockConfig: {
                 region: 'eu-west-1',
                 accessKeyId: 'replacement-access',
                 secretAccessKey: 'replacement-secret',
+              },
+            }
+          : {
+              [`${connection.provider}Config`]: {
+                url: 'https://replacement.example',
+                apiKey: 'replacement-secret',
               },
             }
       const reconfigured = { ...renamed, ...replacement }
@@ -156,10 +181,7 @@ describe('Shared connections management', () => {
       expect(await configResponse.json()).toEqual({ connection: reconfigured })
       expect(await (await admin(path)).json()).toEqual({ connection: reconfigured })
 
-      const originalConfig =
-        connection.provider === 'openai'
-          ? { openaiConfig: connection.openaiConfig }
-          : { bedrockConfig: connection.bedrockConfig }
+      const originalConfig = configuration(connection)
       const combined = { ...connection, name: 'Together' }
       const combinedResponse = await admin(path, 'PUT', { name: ' Together ', ...originalConfig })
       expect(combinedResponse.status).toBe(200)
@@ -173,23 +195,24 @@ describe('Shared connections management', () => {
     }
   )
 
-  it.each([openai, bedrock])(
-    'rejects empty updates, mismatched configurations and both configurations for $provider',
+  it.each([openai, bedrock, jev])(
+    'rejects empty updates, mismatched configurations and multiple configurations for $provider',
     async (connection) => {
       expect((await admin('/connections', 'POST', connection)).status).toBe(201)
       const path = `/connections/${connection.id}`
-      const mismatched =
-        connection.provider === 'openai'
-          ? { bedrockConfig: bedrock.bedrockConfig }
-          : { openaiConfig: openai.openaiConfig }
+      const mismatched = [openai, bedrock, jev]
+        .filter((candidate) => candidate.provider !== connection.provider)
+        .map((candidate) => ({ name: 'Rejected', ...configuration(candidate) }))
       for (const input of [
         {},
-        { name: 'Rejected', ...mismatched },
+        ...mismatched,
         {
           name: 'Rejected',
           openaiConfig: openai.openaiConfig,
           bedrockConfig: bedrock.bedrockConfig,
         },
+        { openaiConfig: openai.openaiConfig, jevConfig: jev.jevConfig },
+        { bedrockConfig: bedrock.bedrockConfig, jevConfig: jev.jevConfig },
       ]) {
         expect((await admin(path, 'PUT', input)).status).toBe(400)
       }
@@ -298,6 +321,39 @@ describe('Shared connections management', () => {
     }
   })
 
+  it('requires Jev models to reference Jev connections and resolves credentials only for proxying', async () => {
+    expect((await admin('/connections', 'POST', openai)).status).toBe(201)
+    expect((await admin('/connections', 'POST', jev)).status).toBe(201)
+    const config = modelConfig({
+      model: 'jev-model',
+      provider: 'jev',
+      backends: [createTestOpenAIBackend({ provider: 'jev', connectionId: 'shared' })],
+    })
+    const mismatch = await error(await admin('/models', 'POST', config), 400)
+    expect(mismatch).toContain("provider 'openai'")
+    expect(mismatch).toContain("model provider 'jev'")
+    config.backends[0].connectionId = 'jev'
+    const created = await admin('/models', 'POST', config)
+    expect(created.status).toBe(201)
+    for (const path of [
+      '/models',
+      '/models/jev-model',
+      '/models/jev-model/backends',
+      '/models/jev-model/backends/b1',
+    ]) {
+      const response = await admin(path)
+      expect(response.status).toBe(200)
+      const text = await response.text()
+      expect(text).toContain('"connectionId":"jev"')
+      expect(text).not.toMatch(/jevConfig|apiKey|jev-secret/)
+    }
+    expect(await (await admin('/connections/jev')).json()).toEqual({ connection: jev })
+    expect((await new ConfigManager(env.DB).getSnapshot()).models[0].backends[0]).toMatchObject({
+      ...config.backends[0],
+      jevConfig: jev.jevConfig,
+    })
+  })
+
   it('lists referencing models and backends in 409 and allows deletion after unlinking', async () => {
     const manager = new ConfigManager(env.DB)
     await manager.addConnection(openai)
@@ -329,9 +385,14 @@ describe('Shared connections management', () => {
     )
     // Direct imports may still contain obsolete fields; management must not expose them.
     await env.DB.prepare(
-      "UPDATE models SET config = json_set(config, '$.backends[0].openaiConfig', json(?), '$.backends[0].bedrockConfig', json(?)) WHERE model = ?"
+      "UPDATE models SET config = json_set(config, '$.backends[0].openaiConfig', json(?), '$.backends[0].bedrockConfig', json(?), '$.backends[0].jevConfig', json(?)) WHERE model = ?"
     )
-      .bind(JSON.stringify(openai.openaiConfig), JSON.stringify(bedrock.bedrockConfig), MODEL)
+      .bind(
+        JSON.stringify(openai.openaiConfig),
+        JSON.stringify(bedrock.bedrockConfig),
+        JSON.stringify(jev.jevConfig),
+        MODEL
+      )
       .run()
     for (const path of [
       '/models',
@@ -344,7 +405,7 @@ describe('Shared connections management', () => {
       const text = await response.text()
       expect(text).toContain('"connectionId":"shared"')
       expect(text).not.toMatch(
-        /openaiConfig|bedrockConfig|apiKey|accessKeyId|secretAccessKey|first-secret/
+        /openaiConfig|bedrockConfig|jevConfig|apiKey|accessKeyId|secretAccessKey|first-secret|jev-secret/
       )
     }
   })

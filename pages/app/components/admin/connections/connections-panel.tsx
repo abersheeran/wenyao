@@ -3,7 +3,7 @@ import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "../../ui/table";
 import { useAdminApi, type Connection, type ModelConfig } from "~/apis";
-import { getProviderBadgeClass, getProviderConfigDisplay, getProviderDisplayName } from "../../../config/provider-config";
+import { getProviderBadgeClass, getConnectionConfigDisplay, getProviderDisplayName } from "../../../config/provider-config";
 import { DeleteConfirmationDialog } from "../backends/delete-confirmation-dialog";
 import { ConnectionDialog } from "./connection-dialog";
 
@@ -81,7 +81,7 @@ export function ConnectionsPanel({ api }: { api: ReturnType<typeof useAdminApi> 
                   </span>
                 </TableCell>
                 <TableCell className="text-sm">
-                  {getProviderConfigDisplay(connection.provider, connection.provider === 'openai' ? connection.openaiConfig : connection.bedrockConfig)}
+                  {getConnectionConfigDisplay(connection)}
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">

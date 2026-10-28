@@ -67,6 +67,7 @@ export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean;
               <SelectContent>
                 <SelectItem value="openai">OpenAI</SelectItem>
                 <SelectItem value="bedrock">AWS Bedrock</SelectItem>
+                <SelectItem value="jev">Jev</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-gray-500 mt-1">

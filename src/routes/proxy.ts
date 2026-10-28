@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 
 import { proxyAuth } from '../middleware/auth.js'
-import { createErrorResponse } from '../providers/base-provider.js'
+import { createErrorResponse, ProviderRequestError } from '../providers/base-provider.js'
 import { providerFactory } from '../providers/provider-factory.js'
 import { AffinityManager } from '../services/affinity-manager.js'
 import { ConcurrencyLimiter } from '../services/concurrency-limiter.js'
@@ -11,7 +11,7 @@ import { RequestRecorder } from '../services/request-recorder.js'
 
 import type { BaseProvider, StandardizedRequest } from '../providers/base-provider.js'
 import type { ResponseRecordingError } from '../services/request-recorder.js'
-import type { BackendConfig } from '../types/backend.js'
+import type { BackendConfig, ProviderType } from '../types/backend.js'
 import type { HonoEnv } from '../types/context.js'
 import type { Context } from 'hono'
 
@@ -355,12 +355,12 @@ async function tryBackend(
   }
 }
 
-function createProxyHandler(providerType: 'openai' | 'bedrock') {
+function createProxyHandler(providerType: ProviderType) {
   return async (c: Context<HonoEnv>): Promise<Response> => {
     const provider = providerFactory.getProvider(providerType)
     let request: StandardizedRequest
     try {
-      const body = await c.req.json<Record<string, unknown>>()
+      const body = await provider.readBody(c)
       if (!body || typeof body !== 'object' || Array.isArray(body))
         throw new Error('JSON object is required')
       provider.validateRequest(c, body)
@@ -369,8 +369,8 @@ function createProxyHandler(providerType: 'openai' | 'bedrock') {
       return createErrorResponse(
         error instanceof Error ? error.message : 'Invalid request',
         'invalid_request_error',
-        'validation_failed',
-        400
+        error instanceof ProviderRequestError ? error.code : 'validation_failed',
+        error instanceof ProviderRequestError ? error.status : 400
       )
     }
     if (!c.get('apiKey').models.includes(request.model))
@@ -448,6 +448,7 @@ function createProxyHandler(providerType: 'openai' | 'bedrock') {
 }
 
 proxyApp.post('/chat/completions', createProxyHandler('openai'))
+proxyApp.post('/systemone', createProxyHandler('jev'))
 proxyApp.post('/model/:modelId/invoke', createProxyHandler('bedrock'))
 proxyApp.post('/model/:modelId/invoke-with-response-stream', createProxyHandler('bedrock'))
 export default proxyApp

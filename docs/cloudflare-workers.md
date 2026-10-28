@@ -49,8 +49,8 @@ CREATE TABLE models (
 
 CREATE TABLE connections (
   id       TEXT PRIMARY KEY,        -- 用户指定，全局唯一，创建后不可修改
-  provider TEXT NOT NULL,           -- openai | bedrock，创建后不可修改
-  config   TEXT NOT NULL,           -- JSON：OpenAI 为 {url, apiKey}，Bedrock 为 {region, accessKeyId, secretAccessKey}
+  provider TEXT NOT NULL,           -- openai | bedrock | jev，创建后不可修改
+  config   TEXT NOT NULL,           -- JSON：OpenAI 和 Jev 为 {url, apiKey}，Bedrock 为 {region, accessKeyId, secretAccessKey}
   name     TEXT NOT NULL DEFAULT '' -- 显示名，可修改，可重复；空字符串表示未命名
 );
 
@@ -240,7 +240,7 @@ CREATE TABLE slots (
 
 ### 5.8 共享连接
 
-上游连接信息是全局实体 connection，存在 `connections` 表：OpenAI 是 `url` + `apiKey`，Bedrock 是 `region` + `accessKeyId` + `secretAccessKey`。backend 只用 `connectionId` 引用 connection，不再内嵌凭据。任意模型的任意 backend 都可以引用同一个 connection。修改一次 connection（例如轮换 key）对所有引用它的 backend 生效；代理路径受 5.1 节缓存影响，最多 10 秒后生效。
+上游连接信息是全局实体 connection，存在 `connections` 表：OpenAI 和 Jev 是 `url` + `apiKey`，Bedrock 是 `region` + `accessKeyId` + `secretAccessKey`。backend 只用 `connectionId` 引用 connection，不再内嵌凭据。任意模型的任意 backend 都可以引用同一个 connection。修改一次 connection（例如轮换 key）对所有引用它的 backend 生效；代理路径受 5.1 节缓存影响，最多 10 秒后生效。
 
 - **标识**：`id` 由用户指定，全局唯一，只能包含字母、数字、`.`、`_`、`-`。`id` 和 `provider` 创建后不可修改，只能修改名称和该 provider 对应的配置。
 - **名称**：`name` 是显示名，用于在选择和列表中区分 connection。
@@ -256,12 +256,12 @@ CREATE TABLE slots (
 - **凭据暴露范围**：模型和 backend 的管理响应只包含 `connectionId`，不再包含凭据。凭据只通过 `/admin/connections` 返回。
 - **管理 API**：
   - `GET /admin/connections` 返回 `{ connections }`；`GET /admin/connections/:id` 返回 `{ connection }`，不存在时返回 404。
-  - `POST /admin/connections` 的请求体为 `{ id, name?, provider, openaiConfig | bedrockConfig }`，返回 201 `{ connection }`，id 已存在时返回 409。
-  - `PUT /admin/connections/:id` 的请求体为 `{ name?, openaiConfig? | bedrockConfig? }`，至少包含一个字段，返回 `{ connection }`。
+  - `POST /admin/connections` 的请求体为 `{ id, name?, provider, openaiConfig | bedrockConfig | jevConfig }`，返回 201 `{ connection }`，id 已存在时返回 409。
+  - `PUT /admin/connections/:id` 的请求体为 `{ name?, openaiConfig? | bedrockConfig? | jevConfig? }`，至少包含一个字段，返回 `{ connection }`。
     - 只修改请求中出现的字段：可以只改名称，也可以只改配置。配置字段出现时整体替换。
     - 配置字段与 provider 不符时返回 400，不存在时返回 404。
   - `DELETE /admin/connections/:id`：不存在时返回 404，被引用时返回 409。
-  - connection 的响应形状为 `{ id, name, provider, openaiConfig | bedrockConfig }`，`name` 总是存在，未命名时为空字符串。
+  - connection 的响应形状为 `{ id, name, provider, openaiConfig | bedrockConfig | jevConfig }`，`name` 总是存在，未命名时为空字符串。
 - **管理面板**：
   - 新增 `/connections` 页，可以增删改 connection（包括名称），并显示每个 connection 被哪些 `model/backendId` 引用。
   - 添加和编辑 backend 时，从与模型 provider 相同的 connection 中选择，不再填写 URL 和凭据。选项显示名称，同时显示 `id` 和 URL / region，便于区分同名或未命名的 connection。
@@ -300,6 +300,38 @@ CREATE TABLE slots (
   - 在 backend 上切换开关或编辑、删除后，选中状态和搜索词保持不变。
 - **窄屏**：未选中模型时只显示列表；选中后只显示详情，顶部有返回列表的链接。
 
+### 5.10 System One API（Jev）
+
+Jev 是 TypeSafe 的决策模型，官方接口是 TypeSafe 的 System One API（`POST https://api.typesafe.ai/v1/systemone`）。请求包含 `model`、`state`、`questions`，可选 `assets`（图片）；响应包含 `model`、`answers`、`usage`，每个问题返回答案和概率。它不生成文本，也不支持流式。OpenRouter 的 `POST https://openrouter.ai/api/v1/systemone` 实现了同样的格式。
+
+文鳐按官方格式代理这个接口：客户端（包括 TypeSafe 官方 SDK）只需把 base URL 换成文鳐的地址、API key 换成代理 key。决策模型与聊天模型共用代理 key、负载均衡、回退、并发限制、指标和录制。
+
+- **路径**：`POST /v1/systemone`，转发到 Jev connection URL 下的 `v1/systemone`。
+  - TypeSafe：connection URL 为 `https://api.typesafe.ai`，API key 用 TypeSafe 的 key。
+  - OpenRouter：connection URL 为 `https://openrouter.ai/api/`（末尾的 `/` 不能省），API key 用 OpenRouter 的 key。
+  - 官方 SDK 把 `baseURL`（或环境变量 `TYPESAFE_BASE_URL`）设为文鳐的地址，`TYPESAFE_API_KEY` 设为代理 key。
+  - 不提供 `GET /v1/models`。
+- **provider**：新增独立的 provider 类型 `jev`，与 `openai`、`bedrock` 并列，由单独的 Jev provider 实现，不挂在 OpenAI provider 上。
+  - 模型的 provider 为 `jev`，只能通过 `/v1/systemone` 访问。`jev` 模型访问其他代理接口，或其他 provider 的模型访问 `/v1/systemone`，都按 provider 不匹配返回 400。
+  - Jev connection 的配置为 `jevConfig: { url, apiKey }`，与 OpenAI connection 形状相同，但属于不同的 provider。`jev` 模型的 backend 只能引用 Jev connection（见 5.8）。同一个 OpenRouter key 同时用于聊天和决策时，需要分别建一个 OpenAI connection 和一个 Jev connection。
+  - 管理面板中创建模型和 connection 时可以选择 Jev，显示名为 `Jev`，connection 表单填写 URL 和 API key。
+  - 鉴权、模型权限、backend 选择、会话亲和、`X-Backend-ID`、回退、并发限制和 `backend.model` 改写，都与其他代理接口相同。
+  - 模型按请求中的 `model` 匹配，例如 `jev-latest`。OpenRouter 的 System One 接口也接受不带 `typesafe/` 前缀的模型名，所以同一个模型的 backend 可以分别使用 TypeSafe 和 OpenRouter 的 connection。
+- **请求格式**：接受官方 API 的全部请求体格式，先还原成 JSON，再走代理流程。
+  - JSON（`application/json`）。
+  - 压缩的请求体：`Content-Encoding` 为 `gzip`、`x-gzip` 或 `zstd`，只允许一层。官方 SDK 默认用 zstd 压缩 1 KiB 以上的请求体。不支持的编码或多层压缩返回 415，损坏的压缩数据返回 400。
+  - `multipart/form-data`：第一个 part 名为 `request`，内容是 JSON 请求；每张图片单独一个 part，由 `assets` 中对应项的 `part` 字段引用。官方 SDK 发送带图片的请求时使用这种格式。文鳐把被引用的图片转成 base64 写入 `data_base64`，按图片字节判断并补上 `format`（`png` 或 `jpeg`），然后去掉 `part`。图片不是 PNG 或 JPEG 时返回 400，与官方一致。
+  - 请求体超过 32 MiB 时返回 413，压缩的请求体对压缩数据和解压后的内容分别检查，与官方限制一致。zstd 的窗口超过 8 MiB 时返回 400，与官方一致。
+  - 每个图片 part 必须恰好被一个 asset 引用，被引用的 part 也必须存在，否则返回 400，与官方一致。
+  - 文鳐只校验 `model` 是非空字符串，其余字段原样转发，由上游校验。
+- **转发**：上游一律收到未压缩的 JSON，`Content-Type: application/json`，`Authorization` 为 Jev connection 的 API key，不带 `Content-Encoding`。其余请求头的过滤规则与 5.2 节相同，`TypeSafe-Danger-Zone-Images`、`TypeSafe-Danger-Zone-Long-Context` 等请求头原样转发。
+- **响应**：一律按非流式处理。
+  - 请求体里的 `stream` 不影响处理方式。
+  - TTFT 超时使用 `nonStreamingTTFTTimeout`，指标记为非流式。
+  - 2xx 响应校验 JSON 后按原始字节返回，响应头（包括 `x-typesafe-request-id`）照常透传。上游的错误响应（例如带 `detail` 的 422）原样返回。
+  - 文鳐自己产生的错误（鉴权、权限、模型不存在、并发已满等）与其他代理接口格式相同，状态码与官方的含义一致。官方 SDK 按状态码区分错误，不依赖错误体的格式。
+- **录制与重放**：录制的是转发给上游的 JSON（图片已内嵌为 base64），`url` 是上游的 `v1/systemone` 地址。重放时把目标地址设为文鳐的 `/v1/systemone`。
+
 ## 6. 接口变化
 
 保留的接口及其路径、请求格式、响应形状不变：
@@ -321,6 +353,7 @@ CREATE TABLE slots (
 - `GET /admin/affinity/:model/:sessionId` 变为纯读取，不再修改访问计数。
 - `/admin/active-requests` 和 Prometheus 的 `llm_proxy_active_requests` 只包含配置了并发限制的后端，计数来自各 backend DO 的 `count()` RPC。未配置限制的后端不再统计活跃请求。
 - 后端配置新增 `recordResponses`。`/admin/recorded-requests` 的每条记录新增 `response` 字段（见 5.5），原有字段不变。
+- 新增 provider `jev` 和代理接口 `POST /v1/systemone`，按 TypeSafe 官方 System One API 的格式代理 Jev（见 5.10）。connection 新增 `jevConfig`。
 - 新增 `/admin/connections` 的 CRUD（见 5.8）。**不兼容变更**：创建和更新 backend（包括通过模型的 `backends` 数组写入）时，用 `connectionId` 代替 `openaiConfig` / `bedrockConfig`。缺少 `connectionId` 的创建请求返回 400。模型和 backend 的响应不再包含凭据。
 
 ## 7. 部署

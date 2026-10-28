@@ -1,4 +1,4 @@
-import { BaseProvider } from './base-provider.js'
+import { BaseProvider, prepareJsonHeaders } from './base-provider.js'
 
 import type { StandardizedRequest } from './base-provider.js'
 import type { ResolvedBackendConfig as BackendConfig } from '../types/backend.js'
@@ -29,35 +29,7 @@ export class OpenAIProvider extends BaseProvider {
     _body: string
   ): Promise<Record<string, string>> {
     if (!backend.openaiConfig) throw new Error('OpenAI configuration is missing for this backend')
-    const result: Record<string, string> = {}
-    const blocked = new Set([
-      'host',
-      'content-length',
-      'authorization',
-      'x-authorization',
-      'x-real-ip',
-      'cdn-loop',
-      'connection',
-      'keep-alive',
-      'transfer-encoding',
-      'upgrade',
-      'te',
-      'trailer',
-      'proxy-authorization',
-      'proxy-authenticate',
-    ])
-    for (const [name, value] of Object.entries(headers)) {
-      if (name.toLowerCase() === 'connection')
-        for (const field of value.split(',')) blocked.add(field.trim().toLowerCase())
-    }
-    for (const [name, value] of Object.entries(headers)) {
-      const lower = name.toLowerCase()
-      if (!blocked.has(lower) && !lower.startsWith('cf-') && !lower.startsWith('x-forwarded-'))
-        result[lower] = value
-    }
-    result.authorization = `Bearer ${backend.openaiConfig.apiKey}`
-    result['content-type'] = 'application/json'
-    return result
+    return prepareJsonHeaders(headers, backend.openaiConfig.apiKey)
   }
 
   prepareRequestBody(

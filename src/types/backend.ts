@@ -2,7 +2,7 @@
 export type LoadBalancingStrategy = 'weighted' | 'lowest-ttft' | 'min-error-rate'
 
 // Provider types
-export type ProviderType = 'openai' | 'bedrock'
+export type ProviderType = 'openai' | 'bedrock' | 'jev'
 
 // AWS Bedrock specific configuration
 export interface BedrockConfig {
@@ -16,6 +16,8 @@ export interface OpenAIConfig {
   url: string
   apiKey: string
 }
+
+export type JevConfig = OpenAIConfig
 
 // Individual backend configuration (within a model config)
 export interface BackendConfig {
@@ -36,6 +38,7 @@ export interface BackendConfig {
 export interface ResolvedBackendConfig extends BackendConfig {
   openaiConfig?: OpenAIConfig
   bedrockConfig?: BedrockConfig
+  jevConfig?: JevConfig
 }
 
 // Load balancing strategy options for min-error-rate

@@ -4,13 +4,18 @@ import { Button } from "../../ui/button";
 import Input from "../../ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import { useAdminApi, type Connection, type ProviderType, type OpenAIConfig, type BedrockConfig } from "~/apis";
-import { createDefaultProviderConfig, getProviderDisplayName } from "../../../config/provider-config";
+import { useAdminApi, type Connection, type ProviderType, type OpenAIConfig, type BedrockConfig, type JevConfig } from "~/apis";
+import { createDefaultProviderConfig, getProviderConfig, getProviderDisplayName } from "../../../config/provider-config";
 
 function createInitialForm(provider: ProviderType): Connection {
-  return provider === 'openai'
-    ? { id: '', name: '', provider, openaiConfig: createDefaultProviderConfig(provider) as OpenAIConfig }
-    : { id: '', name: '', provider, bedrockConfig: createDefaultProviderConfig(provider) as BedrockConfig };
+  switch (provider) {
+    case 'openai':
+      return { id: '', name: '', provider, openaiConfig: createDefaultProviderConfig(provider) as OpenAIConfig };
+    case 'bedrock':
+      return { id: '', name: '', provider, bedrockConfig: createDefaultProviderConfig(provider) as BedrockConfig };
+    case 'jev':
+      return { id: '', name: '', provider, jevConfig: createDefaultProviderConfig(provider) as JevConfig };
+  }
 }
 
 export function ConnectionDialog({ open, onOpenChange, connection, onSaved }: {
@@ -21,14 +26,19 @@ export function ConnectionDialog({ open, onOpenChange, connection, onSaved }: {
 }) {
   const api = useAdminApi();
   const [form, setForm] = React.useState<Connection>(() => connection ?? createInitialForm('openai'));
+  const httpConfig = 'openaiConfig' in form ? form.openaiConfig : 'jevConfig' in form ? form.jevConfig : undefined;
+
+  const updateHttpConfig = (updates: Partial<OpenAIConfig>) => {
+    if (form.provider === 'bedrock') return;
+    const { configField } = getProviderConfig(form.provider);
+    setForm({ ...form, [configField]: { ...httpConfig, ...updates } });
+  };
 
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
     if (connection) {
-      const config = form.provider === 'openai'
-        ? { openaiConfig: form.openaiConfig }
-        : { bedrockConfig: form.bedrockConfig };
-      await api.updateConnection(connection.id, { name: form.name, ...config });
+      const { id, provider: _provider, ...updates } = form;
+      await api.updateConnection(id, updates);
     } else {
       await api.createConnection(form);
     }
@@ -82,10 +92,11 @@ export function ConnectionDialog({ open, onOpenChange, connection, onSaved }: {
               <SelectContent>
                 <SelectItem value="openai">{getProviderDisplayName('openai')}</SelectItem>
                 <SelectItem value="bedrock">{getProviderDisplayName('bedrock')}</SelectItem>
+                <SelectItem value="jev">{getProviderDisplayName('jev')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          {form.provider === 'openai' ? (
+          {form.provider !== 'bedrock' ? (
             <>
               <div>
                 <label htmlFor="connection-url" className="block text-sm mb-1">URL</label>
@@ -93,9 +104,9 @@ export function ConnectionDialog({ open, onOpenChange, connection, onSaved }: {
                   id="connection-url"
                   required
                   type="url"
-                  value={form.openaiConfig.url}
-                  onChange={(e) => setForm({ ...form, openaiConfig: { ...form.openaiConfig, url: e.target.value } })}
-                  placeholder="https://api.openai.com/v1"
+                  value={httpConfig?.url}
+                  onChange={(e) => updateHttpConfig({ url: e.target.value })}
+                  placeholder={form.provider === 'jev' ? 'https://api.typesafe.ai' : 'https://api.openai.com/v1'}
                 />
               </div>
               <div>
@@ -104,8 +115,8 @@ export function ConnectionDialog({ open, onOpenChange, connection, onSaved }: {
                   id="connection-api-key"
                   required
                   type="password"
-                  value={form.openaiConfig.apiKey}
-                  onChange={(e) => setForm({ ...form, openaiConfig: { ...form.openaiConfig, apiKey: e.target.value } })}
+                  value={httpConfig?.apiKey}
+                  onChange={(e) => updateHttpConfig({ apiKey: e.target.value })}
                   placeholder="sk-..."
                 />
               </div>

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { bedrockConfigSchema, openaiConfigSchema } from './backend.js'
+import { bedrockConfigSchema, jevConfigSchema, openaiConfigSchema } from './backend.js'
 
 const connectionIdSchema = z
   .string()
@@ -26,6 +26,14 @@ export const createConnectionSchema = z.discriminatedUnion('provider', [
       bedrockConfig: bedrockConfigSchema,
     })
     .strict(),
+  z
+    .object({
+      id: connectionIdSchema,
+      name: z.string().trim().optional(),
+      provider: z.literal('jev'),
+      jevConfig: jevConfigSchema,
+    })
+    .strict(),
 ])
 
 export const updateConnectionSchema = z
@@ -33,17 +41,22 @@ export const updateConnectionSchema = z
     name: z.string().trim().optional(),
     openaiConfig: openaiConfigSchema.optional(),
     bedrockConfig: bedrockConfigSchema.optional(),
+    jevConfig: jevConfigSchema.optional(),
   })
   .strict()
   .refine(
     (updates) =>
       updates.name !== undefined ||
       updates.openaiConfig !== undefined ||
-      updates.bedrockConfig !== undefined,
+      updates.bedrockConfig !== undefined ||
+      updates.jevConfig !== undefined,
     'At least one field is required'
   )
   .refine(
-    (updates) => updates.openaiConfig === undefined || updates.bedrockConfig === undefined,
+    (updates) =>
+      [updates.openaiConfig, updates.bedrockConfig, updates.jevConfig].filter(
+        (config) => config !== undefined
+      ).length <= 1,
     'Only one provider configuration is allowed'
   )
 

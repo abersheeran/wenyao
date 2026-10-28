@@ -1,11 +1,13 @@
 export type LoadBalancingStrategy = 'weighted' | 'lowest-ttft' | 'min-error-rate';
 
-export type ProviderType = 'openai' | 'bedrock';
+export type ProviderType = 'openai' | 'bedrock' | 'jev';
 
 export type OpenAIConfig = {
   url: string;
   apiKey: string;
 };
+
+export type JevConfig = OpenAIConfig;
 
 export type BedrockConfig = {
   region: string;
@@ -16,9 +18,10 @@ export type BedrockConfig = {
 export type Connection = { id: string; name: string } & (
   | { provider: 'openai'; openaiConfig: OpenAIConfig }
   | { provider: 'bedrock'; bedrockConfig: BedrockConfig }
+  | { provider: 'jev'; jevConfig: JevConfig }
 );
 
-export type ConnectionConfig = { openaiConfig: OpenAIConfig } | { bedrockConfig: BedrockConfig };
+export type ConnectionConfig = { openaiConfig: OpenAIConfig } | { bedrockConfig: BedrockConfig } | { jevConfig: JevConfig };
 
 export type BackendConfig = {
   id: string;
@@ -169,6 +172,7 @@ export function useAdminApi() {
     async createConnection(payload: { id: string; name?: string } & (
       | { provider: 'openai'; openaiConfig: OpenAIConfig }
       | { provider: 'bedrock'; bedrockConfig: BedrockConfig }
+      | { provider: 'jev'; jevConfig: JevConfig }
     )): Promise<Connection> {
       const res = await fetch(`${base}/connections`, {
         method: "POST",

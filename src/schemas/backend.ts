@@ -4,7 +4,7 @@ import { z } from 'zod'
 export const loadBalancingStrategySchema = z.enum(['weighted', 'lowest-ttft', 'min-error-rate'])
 
 // Provider type enum
-export const providerTypeSchema = z.enum(['openai', 'bedrock'])
+export const providerTypeSchema = z.enum(['openai', 'bedrock', 'jev'])
 
 // OpenAI configuration schema
 export const openaiConfigSchema = z.object({
@@ -24,6 +24,8 @@ export const openaiConfigSchema = z.object({
     ),
   apiKey: z.string().min(1, 'API key is required'),
 })
+
+export const jevConfigSchema = openaiConfigSchema
 
 // Bedrock configuration schema
 export const bedrockConfigSchema = z.object({

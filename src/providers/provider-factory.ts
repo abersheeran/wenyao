@@ -4,13 +4,14 @@
  */
 
 import { BedrockProvider } from './bedrock-provider.js'
+import { JevProvider } from './jev-provider.js'
 import { OpenAIProvider } from './openai-provider.js'
 
 import type { BaseProvider } from './base-provider.js'
 
-export type ProviderType = 'openai' | 'bedrock'
+export type ProviderType = 'openai' | 'bedrock' | 'jev'
 
-type ProviderClassType = typeof BedrockProvider | typeof OpenAIProvider
+type ProviderClassType = typeof BedrockProvider | typeof OpenAIProvider | typeof JevProvider
 
 /**
  * Provider factory singleton
@@ -22,6 +23,7 @@ class ProviderFactory {
     // Register built-in providers
     this.registerProvider('openai', OpenAIProvider)
     this.registerProvider('bedrock', BedrockProvider)
+    this.registerProvider('jev', JevProvider)
   }
 
   /**

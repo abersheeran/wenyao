@@ -21,6 +21,17 @@ export function createTestOpenAIBackend(overrides: Partial<BackendConfig> = {}):
   }
 }
 
+export function createTestJevBackend(overrides: Partial<BackendConfig> = {}): BackendConfig {
+  return {
+    id: 'b1',
+    provider: 'jev',
+    enabled: true,
+    weight: 1,
+    connectionId: 'jev-test',
+    ...overrides,
+  }
+}
+
 export function createTestBedrockBackend(overrides: Partial<BackendConfig> = {}): BackendConfig {
   return {
     id: 'bedrock',
@@ -87,6 +98,23 @@ export async function seedConnections(): Promise<void> {
         accessKeyId: 'test-access-key',
         secretAccessKey: 'test-secret-key',
       },
+    },
+  ]) {
+    expect((await admin('/connections', 'POST', connection)).status).toBe(201)
+  }
+}
+
+export async function seedJevConnections(): Promise<void> {
+  for (const connection of [
+    {
+      id: 'jev-test',
+      provider: 'jev',
+      jevConfig: { url: 'https://jev.example', apiKey: 'jev-upstream-secret' },
+    },
+    {
+      id: 'jev-second',
+      provider: 'jev',
+      jevConfig: { url: 'https://jev2.example', apiKey: 'jev-second-secret' },
     },
   ]) {
     expect((await admin('/connections', 'POST', connection)).status).toBe(201)

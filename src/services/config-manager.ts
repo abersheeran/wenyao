@@ -64,9 +64,14 @@ function apiKeyFromRow(row: ApiKeyRow): ApiKey {
 
 function connectionFromRow(row: ConnectionRow): Connection {
   const { id, name, provider } = row
-  return provider === 'openai'
-    ? { id, name, provider, openaiConfig: JSON.parse(row.config) }
-    : { id, name, provider, bedrockConfig: JSON.parse(row.config) }
+  switch (provider) {
+    case 'openai':
+      return { id, name, provider, openaiConfig: JSON.parse(row.config) }
+    case 'bedrock':
+      return { id, name, provider, bedrockConfig: JSON.parse(row.config) }
+    case 'jev':
+      return { id, name, provider, jevConfig: JSON.parse(row.config) }
+  }
 }
 
 function parseModelConfig(config: string): ModelConfig {
@@ -74,7 +79,7 @@ function parseModelConfig(config: string): ModelConfig {
   return {
     ...model,
     backends: model.backends.map(
-      ({ openaiConfig: _openai, bedrockConfig: _bedrock, ...backend }) => backend
+      ({ openaiConfig: _openai, bedrockConfig: _bedrock, jevConfig: _jev, ...backend }) => backend
     ),
   }
 }
@@ -113,9 +118,8 @@ export class ConfigManager {
                 backend.provider !== model.provider
               )
                 return backend
-              return connection.provider === 'openai'
-                ? { ...backend, openaiConfig: connection.openaiConfig }
-                : { ...backend, bedrockConfig: connection.bedrockConfig }
+              const { id: _id, name: _name, provider: _provider, ...config } = connection
+              return { ...backend, ...config }
             }),
           }
         }),
@@ -363,7 +367,11 @@ export class ConfigManager {
   async addConnection(connection: CreateConnectionInput): Promise<Connection> {
     const name = connection.name ?? ''
     const config =
-      connection.provider === 'openai' ? connection.openaiConfig : connection.bedrockConfig
+      'openaiConfig' in connection
+        ? connection.openaiConfig
+        : 'bedrockConfig' in connection
+          ? connection.bedrockConfig
+          : connection.jevConfig
     const result = await this.db
       .prepare('INSERT OR IGNORE INTO connections (id, name, provider, config) VALUES (?, ?, ?, ?)')
       .bind(connection.id, name, connection.provider, JSON.stringify(config))
@@ -379,14 +387,15 @@ export class ConfigManager {
     if (!connection) throw new BusinessError(`Connection '${id}' not found`, 404)
     if (
       (updates.openaiConfig !== undefined && connection.provider !== 'openai') ||
-      (updates.bedrockConfig !== undefined && connection.provider !== 'bedrock')
+      (updates.bedrockConfig !== undefined && connection.provider !== 'bedrock') ||
+      (updates.jevConfig !== undefined && connection.provider !== 'jev')
     ) {
       throw new BusinessError(
         `Configuration does not match connection '${id}' provider '${connection.provider}'`,
         400
       )
     }
-    const config = updates.openaiConfig ?? updates.bedrockConfig
+    const config = updates.openaiConfig ?? updates.bedrockConfig ?? updates.jevConfig
     const row = await this.db
       .prepare(
         `UPDATE connections SET name = COALESCE(?, name), config = COALESCE(?, config)
