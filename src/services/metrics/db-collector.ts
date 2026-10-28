@@ -1,24 +1,33 @@
 import { PrometheusExporter } from './prometheus-exporter.js'
 
-import type { HistoryQueryParams, MetricsTotals, RequestCompleteData, TimeWindow } from './types.js'
+import type {
+  BackendIdentity,
+  HistoryQueryParams,
+  MetricsTotals,
+  RequestCompleteData,
+  TimeWindow,
+} from './types.js'
 import type { BackendStats, StatsDataPoint } from '../../types/backend.js'
+
+type BackendStatsMap = Map<string, Map<string, BackendStats>>
 
 interface RecentStatsCache {
   expiresAt: number
-  stats: Map<string, BackendStats>
+  stats: BackendStatsMap
 }
 
 // Share completed data only; never retain request-scoped I/O or Promises.
 const recentStatsCaches = new WeakMap<D1Database, Map<number, RecentStatsCache>>()
 
-const TOTAL_COLUMNS = `backend_id, SUM(total) AS total, SUM(success) AS success,
+const TOTAL_COLUMNS = `model, backend_id, SUM(total) AS total, SUM(success) AS success,
   SUM(failure) AS failure, SUM(streaming_ttft_sum) AS streaming_ttft_sum,
   SUM(streaming_ttft_count) AS streaming_ttft_count,
   SUM(non_streaming_ttft_sum) AS non_streaming_ttft_sum,
   SUM(non_streaming_ttft_count) AS non_streaming_ttft_count`
 
-export function emptyStats(backendId: string): BackendStats {
+export function emptyStats(model: string, backendId: string): BackendStats {
   return {
+    model,
     backendId,
     totalRequests: 0,
     successfulRequests: 0,
@@ -32,6 +41,7 @@ export function emptyStats(backendId: string): BackendStats {
 
 function toStats(row: MetricsTotals): BackendStats {
   return {
+    model: row.model,
     backendId: row.backend_id,
     totalRequests: row.total,
     successfulRequests: row.success,
@@ -61,10 +71,10 @@ export class DbMetricsCollector {
     return this.db
       .prepare(
         `INSERT INTO backend_stats_minute
-          (backend_id, minute, total, success, failure, streaming_ttft_sum,
+          (model, backend_id, minute, total, success, failure, streaming_ttft_sum,
            streaming_ttft_count, non_streaming_ttft_sum, non_streaming_ttft_count)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (backend_id, minute) DO UPDATE SET
+         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (model, backend_id, minute) DO UPDATE SET
            total = total + 1,
            success = success + excluded.success,
            failure = failure + excluded.failure,
@@ -74,6 +84,7 @@ export class DbMetricsCollector {
            non_streaming_ttft_count = non_streaming_ttft_count + excluded.non_streaming_ttft_count`
       )
       .bind(
+        data.model,
         data.backendId,
         Math.floor(now / 60_000) * 60_000,
         data.status === 'success' ? 1 : 0,
@@ -85,34 +96,34 @@ export class DbMetricsCollector {
       )
   }
 
-  async getTotals(timeWindow: TimeWindow, backendId?: string): Promise<MetricsTotals[]> {
+  async getTotals(timeWindow: TimeWindow, backend?: BackendIdentity): Promise<MetricsTotals[]> {
     const query = this.db.prepare(
       `SELECT ${TOTAL_COLUMNS} FROM backend_stats_minute
-       WHERE minute > ? AND minute <= ? ${backendId === undefined ? '' : 'AND backend_id = ?'}
-       GROUP BY backend_id`
+       WHERE minute > ? AND minute <= ? ${backend ? 'AND model = ? AND backend_id = ?' : ''}
+       GROUP BY model, backend_id ORDER BY model, backend_id`
     )
     const params: (number | string)[] = [
       timeWindow.startTime.getTime() - 60_000,
       timeWindow.endTime.getTime(),
     ]
-    if (backendId !== undefined) params.push(backendId)
+    if (backend) params.push(backend.model, backend.backendId)
     return (await query.bind(...params).all<MetricsTotals>()).results
   }
 
-  async getStats(backendId: string, timeWindow: TimeWindow): Promise<BackendStats> {
-    const rows = await this.getTotals(timeWindow, backendId)
-    return rows.length > 0 ? toStats(rows[0]) : emptyStats(backendId)
+  async getStats(model: string, backendId: string, timeWindow: TimeWindow): Promise<BackendStats> {
+    const rows = await this.getTotals(timeWindow, { model, backendId })
+    return rows.length > 0 ? toStats(rows[0]) : emptyStats(model, backendId)
   }
 
-  async getRecentStats(backendId: string, windowMs: number): Promise<BackendStats> {
+  async getRecentStats(model: string, backendId: string, windowMs: number): Promise<BackendStats> {
     const now = Date.now()
-    return this.getStats(backendId, {
+    return this.getStats(model, backendId, {
       startTime: new Date(now - windowMs),
       endTime: new Date(now),
     })
   }
 
-  async getRecentStatsMap(windowMs: number): Promise<Map<string, BackendStats>> {
+  async getRecentStatsMap(windowMs: number): Promise<BackendStatsMap> {
     const now = Date.now()
     let caches = recentStatsCaches.get(this.db)
     if (!caches) {
@@ -130,16 +141,24 @@ export class DbMetricsCollector {
     return stats
   }
 
-  async getAllStats(timeWindow: TimeWindow): Promise<Map<string, BackendStats>> {
+  async getAllStats(timeWindow: TimeWindow): Promise<BackendStatsMap> {
     const rows = await this.getTotals(timeWindow)
-    return new Map(rows.map((row) => [row.backend_id, toStats(row)]))
+    const stats: BackendStatsMap = new Map()
+    for (const row of rows) {
+      let backends = stats.get(row.model)
+      if (!backends) stats.set(row.model, (backends = new Map()))
+      backends.set(row.backend_id, toStats(row))
+    }
+    return stats
   }
 
-  async resetStats(backendId?: string): Promise<number> {
+  async resetStats(backend?: BackendIdentity): Promise<number> {
     const statement =
-      backendId === undefined
+      backend === undefined
         ? this.db.prepare('DELETE FROM backend_stats_minute')
-        : this.db.prepare('DELETE FROM backend_stats_minute WHERE backend_id = ?').bind(backendId)
+        : this.db
+            .prepare('DELETE FROM backend_stats_minute WHERE model = ? AND backend_id = ?')
+            .bind(backend.model, backend.backendId)
     const count = (await statement.run()).meta.changes
     recentStatsCaches.delete(this.db)
     return count
@@ -150,13 +169,13 @@ export class DbMetricsCollector {
       params.startTime.getTime() - 60_000,
       params.endTime.getTime(),
     ]
-    if (params.backendId !== undefined) values.push(params.backendId)
+    if (params.backend) values.push(params.backend.model, params.backend.backendId)
     if (params.limit !== undefined) values.push(params.limit)
     const { results } = await this.db
       .prepare(
         `SELECT * FROM backend_stats_minute WHERE minute > ? AND minute <= ?
-         ${params.backendId === undefined ? '' : 'AND backend_id = ?'}
-         ORDER BY minute DESC, backend_id
+         ${params.backend ? 'AND model = ? AND backend_id = ?' : ''}
+         ORDER BY minute DESC, model, backend_id
          ${params.limit === undefined ? '' : 'LIMIT ?'}`
       )
       .bind(...values)
@@ -164,6 +183,7 @@ export class DbMetricsCollector {
     return results.map((row) => {
       const stats = toStats(row)
       return {
+        model: row.model,
         backendId: row.backend_id,
         timestamp: new Date(row.minute),
         totalRequests: stats.totalRequests,

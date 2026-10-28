@@ -26,6 +26,7 @@ import type { RequestCompleteData } from '../services/metrics/types.js'
 
 function completion(overrides: Partial<RequestCompleteData> = {}): RequestCompleteData {
   return {
+    model: MODEL,
     backendId: 'b1',
     requestId: crypto.randomUUID(),
     status: 'success',
@@ -79,6 +80,40 @@ describe('Durable Object active-request monitoring', () => {
 })
 
 describe('D1 minute aggregates', () => {
+  it('keeps tuple identities distinct when slash-joined model/backend names would collide', async () => {
+    const collector = new DbMetricsCollector(env.DB)
+    await env.DB.batch([
+      collector.completionStatement(completion({ model: 'a/b.v1', backendId: 'c' })),
+      collector.completionStatement(
+        completion({ model: 'a', backendId: 'b.v1/c', status: 'failure' })
+      ),
+    ])
+    const stats = await collector.getRecentStatsMap(60_000)
+    expect(stats.get('a/b.v1')!.get('c')).toMatchObject({
+      model: 'a/b.v1',
+      backendId: 'c',
+      successfulRequests: 1,
+      failedRequests: 0,
+    })
+    expect(stats.get('a')!.get('b.v1/c')).toMatchObject({
+      model: 'a',
+      backendId: 'b.v1/c',
+      successfulRequests: 0,
+      failedRequests: 1,
+    })
+    expect(await collector.getRecentStats('missing', 'c', 60_000)).toEqual({
+      model: 'missing',
+      backendId: 'c',
+      totalRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      successRate: 0,
+      averageStreamingTTFT: 0,
+      averageNonStreamingTTFT: 0,
+      ttftSamples: [],
+    })
+  })
+
   it('upserts success/failure and uses stream-specific sample counts for TTFT averages', async () => {
     const collector = new DbMetricsCollector(env.DB)
     const data = [
@@ -88,8 +123,10 @@ describe('D1 minute aggregates', () => {
       completion({ status: 'failure' }),
     ]
     await env.DB.batch(data.map((item) => collector.completionStatement(item)))
-    const stats = await collector.getRecentStats('b1', 60_000)
+    const stats = await collector.getRecentStats(MODEL, 'b1', 60_000)
     expect(stats).toMatchObject({
+      model: MODEL,
+      backendId: 'b1',
       totalRequests: 4,
       successfulRequests: 3,
       failedRequests: 1,
@@ -120,7 +157,7 @@ describe('D1 minute aggregates', () => {
       nonStreamingSum: 500,
       nonStreamingCount: 1,
     })
-    const stats = await new DbMetricsCollector(env.DB).getRecentStats('b1', 120_000)
+    const stats = await new DbMetricsCollector(env.DB).getRecentStats(MODEL, 'b1', 120_000)
     expect(stats.totalRequests).toBe(102)
     expect(stats.averageStreamingTTFT).toBe(250)
     expect(stats.averageNonStreamingTTFT).toBe(350)
@@ -131,12 +168,12 @@ describe('D1 minute aggregates', () => {
     for (let i = -2; i <= 2; i++)
       await insertStats('b1', { minute: minute + i * 60_000, total: i + 3, success: i + 3 })
     const collector = new DbMetricsCollector(env.DB)
-    const stats = await collector.getStats('b1', {
+    const stats = await collector.getStats(MODEL, 'b1', {
       startTime: new Date(minute - 30_000),
       endTime: new Date(minute + 30_000),
     })
     expect(stats.totalRequests).toBe(5) // previous minute (2) and current minute (3)
-    const exact = await collector.getStats('b1', {
+    const exact = await collector.getStats(MODEL, 'b1', {
       startTime: new Date(minute),
       endTime: new Date(minute),
     })
@@ -149,23 +186,85 @@ describe('D1 minute aggregates', () => {
     const collector = new DbMetricsCollector(env.DB)
     const query = vi.spyOn(collector, 'getAllStats')
     const first = await collector.getRecentStatsMap(900_000)
-    expect([...first.keys()].sort()).toEqual(['b1', 'b2'])
-    await env.DB.prepare('UPDATE backend_stats_minute SET total = 99 WHERE backend_id = ?')
-      .bind('b1')
+    expect([...first.keys()]).toEqual([MODEL])
+    expect([...first.get(MODEL)!.keys()].sort()).toEqual(['b1', 'b2'])
+    await env.DB.prepare(
+      'UPDATE backend_stats_minute SET total = 99 WHERE model = ? AND backend_id = ?'
+    )
+      .bind(MODEL, 'b1')
       .run()
     expect(
-      (await new DbMetricsCollector(env.DB).getRecentStatsMap(900_000)).get('b1')!.totalRequests
+      (await new DbMetricsCollector(env.DB).getRecentStatsMap(900_000)).get(MODEL)!.get('b1')!
+        .totalRequests
     ).toBe(20)
     expect(query).toHaveBeenCalledOnce()
     const now = Date.now()
     vi.spyOn(Date, 'now').mockReturnValue(now + 15_001)
-    expect((await collector.getRecentStatsMap(900_000)).get('b1')!.totalRequests).toBe(99)
+    expect((await collector.getRecentStatsMap(900_000)).get(MODEL)!.get('b1')!.totalRequests).toBe(
+      99
+    )
     expect(query).toHaveBeenCalledTimes(2)
   })
 })
 
 describe('Load balancing with real D1 statistics', () => {
   const backends = [createTestOpenAIBackend({ id: 'b1' }), createTestOpenAIBackend({ id: 'b2' })]
+
+  it.each(['lowest-ttft', 'min-error-rate'] as const)(
+    '%s ignores extreme statistics for the same backend IDs in another model',
+    async (strategy) => {
+      const collector = new DbMetricsCollector(env.DB)
+      const lb = new LoadBalancer(collector)
+      const model = modelConfig({ backends, loadBalancingStrategy: strategy })
+      await insertStats('b1', {
+        total: 100,
+        success: 100,
+        streamingSum: 100,
+        streamingCount: 1,
+        nonStreamingSum: 100,
+        nonStreamingCount: 1,
+      })
+      await insertStats('b2', {
+        total: 100,
+        success: 0,
+        failure: 100,
+        streamingSum: 900,
+        streamingCount: 1,
+        nonStreamingSum: 900,
+        nonStreamingCount: 1,
+      })
+      vi.spyOn(Math, 'random').mockReturnValue(0.5)
+      expect((await lb.selectBackend(model, undefined, true))!.id).toBe('b1')
+
+      const otherModel = 'vendor/other.v1'
+      await insertStats('b1', {
+        model: otherModel,
+        total: 10_000,
+        success: 0,
+        failure: 10_000,
+        streamingSum: 1e12,
+        streamingCount: 10_000,
+        nonStreamingSum: 1e12,
+        nonStreamingCount: 10_000,
+      })
+      await insertStats('b2', {
+        model: otherModel,
+        total: 10_000,
+        success: 10_000,
+        streamingSum: 1,
+        streamingCount: 10_000,
+        nonStreamingSum: 1,
+        nonStreamingCount: 10_000,
+      })
+      // Expire the shared cache so the new model's data is part of the same query.
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 15_001)
+      expect((await lb.selectBackend(model, undefined, true))!.id).toBe('b1')
+      expect((await lb.selectBackend(model, undefined, false))!.id).toBe('b1')
+      expect((await lb.selectBackend({ ...model, model: otherModel }, undefined, true))!.id).toBe(
+        'b2'
+      )
+    }
+  )
 
   it('lowest-ttft uses the request stream type', async () => {
     await insertStats('b1', {
@@ -317,6 +416,11 @@ describe('Scheduled expiration', () => {
     await insertAffinity('new', 'b1', now)
     await insertStats('b1', { minute: Math.floor((now - 31 * 86_400_000) / 60_000) * 60_000 })
     await insertStats('b1')
+    await insertStats('b1', {
+      model: 'other/model',
+      minute: Math.floor((now - 31 * 86_400_000) / 60_000) * 60_000,
+    })
+    await insertStats('b1', { model: 'other/model' })
     await env.DB.prepare(
       'INSERT INTO recorded_requests (id, backend_id, model, timestamp, url, headers) VALUES (?, ?, ?, ?, ?, ?)'
     )
@@ -331,7 +435,16 @@ describe('Scheduled expiration', () => {
     )
     await waitOnExecutionContext(context)
     expect(await count('affinity_mappings')).toBe(1)
-    expect(await count('backend_stats_minute')).toBe(1)
+    expect(
+      (
+        await env.DB.prepare(
+          'SELECT model, backend_id FROM backend_stats_minute ORDER BY model'
+        ).all()
+      ).results
+    ).toEqual([
+      { model: MODEL, backend_id: 'b1' },
+      { model: 'other/model', backend_id: 'b1' },
+    ])
     expect(await count('recorded_requests')).toBe(1)
     expect(await env.RECORDINGS.get('recorded-requests/recording')).not.toBeNull()
   })

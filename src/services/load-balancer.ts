@@ -75,7 +75,7 @@ export class LoadBalancer {
         return this.selectByWeight(enabledBackends)
 
       case 'lowest-ttft':
-        return await this.selectByLowestTTFT(enabledBackends, isStream)
+        return await this.selectByLowestTTFT(enabledBackends, modelConfig.model, isStream)
 
       case 'min-error-rate':
         return await this.selectByMinErrorRate(enabledBackends, modelConfig)
@@ -125,6 +125,7 @@ export class LoadBalancer {
    */
   private async selectByLowestTTFT(
     backends: BackendConfig[],
+    model: string,
     isStream?: boolean
   ): Promise<BackendConfig> {
     // Filter out backends with weight=0
@@ -139,7 +140,7 @@ export class LoadBalancer {
 
     const statsMap = await this.metricsCollector.getRecentStatsMap(15 * 60 * 1000)
     const backendStats = eligibleBackends.map((backend) => {
-      const stats = statsMap.get(backend.id) ?? emptyStats(backend.id)
+      const stats = statsMap.get(model)?.get(backend.id) ?? emptyStats(model, backend.id)
       return { backend, stats, hasData: stats.totalRequests > 0 }
     })
 
@@ -209,7 +210,9 @@ export class LoadBalancer {
 
     const statsMap = await this.metricsCollector.getRecentStatsMap(TIME_WINDOW_MINUTES * 60 * 1000)
     const backendStats = eligibleBackends.map((backend) => {
-      const stats = statsMap.get(backend.id) ?? emptyStats(backend.id)
+      const stats =
+        statsMap.get(modelConfig.model)?.get(backend.id) ??
+        emptyStats(modelConfig.model, backend.id)
       return {
         backend,
         errorRate: 1 - stats.successRate,

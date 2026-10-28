@@ -79,6 +79,7 @@ export interface ResolvedModelConfig extends ModelConfig {
 
 // Statistics for each backend
 export interface BackendStats {
+  model: string
   backendId: string
   totalRequests: number
   successfulRequests: number
@@ -91,6 +92,7 @@ export interface BackendStats {
 
 // Historical stats data point (stored in database)
 export interface StatsDataPoint {
+  model: string
   backendId: string
   timestamp: Date // Time of the data point
   totalRequests: number
@@ -104,6 +106,7 @@ export interface StatsDataPoint {
 
 // Historical stats query result
 export interface HistoricalStats {
+  model: string
   backendId: string
   dataPoints: StatsDataPoint[]
   startTime: Date

@@ -11,14 +11,9 @@ beforeAll(async () => {
 beforeEach(async () => {
   await new DbMetricsCollector(env.DB).resetStats()
   await env.DB.batch(
-    [
-      'models',
-      'connections',
-      'api_keys',
-      'backend_stats_minute',
-      'affinity_mappings',
-      'recorded_requests',
-    ].map((table) => env.DB.prepare(`DELETE FROM ${table}`))
+    ['models', 'connections', 'api_keys', 'affinity_mappings', 'recorded_requests'].map((table) =>
+      env.DB.prepare(`DELETE FROM ${table}`)
+    )
   )
   const concurrencyIds = await listDurableObjectIds(env.CONCURRENCY)
   await Promise.all(

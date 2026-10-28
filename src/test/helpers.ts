@@ -171,6 +171,7 @@ export async function count(table: string): Promise<number> {
 export async function insertStats(
   backendId: string,
   options: {
+    model?: string
     minute?: number
     total?: number
     success?: number
@@ -183,11 +184,12 @@ export async function insertStats(
 ): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO backend_stats_minute
-      (backend_id, minute, total, success, failure, streaming_ttft_sum, streaming_ttft_count,
+      (model, backend_id, minute, total, success, failure, streaming_ttft_sum, streaming_ttft_count,
        non_streaming_ttft_sum, non_streaming_ttft_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
+      options.model ?? MODEL,
       backendId,
       options.minute ?? Math.floor(Date.now() / 60_000) * 60_000,
       options.total ?? 20,

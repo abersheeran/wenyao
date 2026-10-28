@@ -63,6 +63,7 @@ CREATE TABLE api_keys (
 );
 
 CREATE TABLE backend_stats_minute (
+  model                    TEXT    NOT NULL,
   backend_id               TEXT    NOT NULL,
   minute                   INTEGER NOT NULL,  -- 截断到分钟的毫秒 epoch
   total                    INTEGER NOT NULL DEFAULT 0,
@@ -72,7 +73,7 @@ CREATE TABLE backend_stats_minute (
   streaming_ttft_count     INTEGER NOT NULL DEFAULT 0,
   non_streaming_ttft_sum   REAL    NOT NULL DEFAULT 0,
   non_streaming_ttft_count INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (backend_id, minute)
+  PRIMARY KEY (model, backend_id, minute)
 );
 CREATE INDEX idx_backend_stats_minute ON backend_stats_minute (minute);
 
@@ -163,12 +164,13 @@ CREATE TABLE slots (
 
 ### 5.3 指标
 
+- 指标以「模型 + backend ID」为标识，因为 backend ID 只要求在同一模型内唯一。同名 backend 在不同模型下分别统计，数据项均包含 `model` 和 `backendId`。
 - 每次后端尝试结束时，写一次分钟汇总：
   ```sql
-  INSERT INTO backend_stats_minute (backend_id, minute, total, success, failure,
+  INSERT INTO backend_stats_minute (model, backend_id, minute, total, success, failure,
     streaming_ttft_sum, streaming_ttft_count, non_streaming_ttft_sum, non_streaming_ttft_count)
-  VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT (backend_id, minute) DO UPDATE SET
+  VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT (model, backend_id, minute) DO UPDATE SET
     total = total + 1,
     success = success + excluded.success,
     failure = failure + excluded.failure,
@@ -179,7 +181,9 @@ CREATE TABLE slots (
   ```
 - 平均 TTFT 按流类型分别计算：`sum / count`。原实现用总请求数做权重，混合流式与非流式时结果是错的，这里一并修正。
 - 查询时间窗口 `[start, end]` 时，包含所有与窗口有交集的分钟桶：`minute > start - 60000 AND minute <= end`。
-- `lowest-ttft` 和 `min-error-rate` 用一条 `GROUP BY backend_id` 查询拿到所有候选后端的统计，结果在 isolate 内缓存 15 秒。选择算法本身不变。
+- `lowest-ttft` 和 `min-error-rate` 一次查询全部模型的统计，按 `model, backend_id` 分组，结果在 isolate 内缓存 15 秒；选择时只使用本模型的 backend 统计，其他模型的同名 backend 不影响选择。
+- Prometheus 的请求计数、请求时长计数、TTFT 和成功率指标增加 `model` 标签，指标名不变。导出范围是配置中已启用的 `(model, backendId)` 与最近 60 秒有数据的 `(model, backendId)` 的并集；时间窗口遵循分钟桶规则。活跃请求指标仍只按 backend ID 区分，与并发限制 DO 一致。
+- `0004_model_backend_stats.sql` 迁移旧指标时，按当前全部模型配置（包括禁用 backend）查找每个 backend ID 的归属：恰好属于一个模型则保留并归入该模型；属于多个模型的数据已混合、无法拆分，或不属于任何模型时，丢弃。
 - 指标始终开启，因为 D1 是必需绑定。因此删除 `ENABLE_METRICS`、`NoopMetricsCollector` 和"策略需要开启指标"的启动校验。
 
 ### 5.4 会话亲和
@@ -273,7 +277,9 @@ CREATE TABLE slots (
   - `scripts/migrate-from-mongodb.ts` 按同样的合并和编号规则生成 connection，以及引用它们的模型。
   - 迁移生成的 connection 都未命名，可以在管理面板中补充名称。
 
-### 5.9 管理面板：模型与后端页
+### 5.9 管理面板
+
+`/stats` 页的筛选按钮、图例和 tooltip 均以 `model/backendId` 标识 backend，按模型名、再按 backend ID 排序。每个模型的同名 backend 可以独立筛选。
 
 模型和 backend 多了以后，要能快速找到某个模型，并在它和其他模型之间切换。`/` 页采用左右两栏布局：左栏是模型列表，右栏是选中模型的详情。
 
@@ -337,7 +343,14 @@ Jev 是 TypeSafe 的决策模型，官方接口是 TypeSafe 的 System One API�
 保留的接口及其路径、请求格式、响应形状不变：
 
 - 代理：`/v1/chat/completions`、Bedrock 的 `/v1/model/:modelId/invoke` 和 `/v1/model/:modelId/invoke-with-response-stream`。
-- 管理：models / backends / apikeys / affinity / recorded-requests 的 CRUD；`/admin/stats` 及其子路由（含 `DELETE` 重置）、`/admin/stats/history*`、`/admin/metrics`（Prometheus 指标名不变）、`/admin/active-requests`。
+- 管理：models / backends / apikeys / affinity / recorded-requests 的 CRUD；`/admin/active-requests`；`DELETE /admin/stats` 仍清空全部指标。
+
+指标接口的不兼容变更：
+
+- `GET /admin/stats` 每项新增 `model`，保留 `backendId`；历史数据点也新增 `model`。
+- 单 backend 路由替换为 `GET /admin/stats/:model/:backendId`、`GET /admin/stats/history/:model/:backendId`、`DELETE /admin/stats/:model/:backendId`，删除原来仅有 `:backendId` 的版本。单项删除只清除对应模型和 backend 的统计。路径中的模型名和 backend ID 分别使用 `encodeURIComponent`，与 `/admin/models/:model/backends/:backendId` 一致，支持名称中的 `/`、`.` 等字符。
+- `GET /admin/stats/history` 返回 `{ history: { [model]: { [backendId]: StatsDataPoint[] } } }`。单 backend 历史响应在原有 `backendId`、`dataPoints` 等字段外新增 `model`，无数据时也返回这两个标识和空数组。
+- `/admin/metrics` 中 `llm_proxy_requests_total`、`llm_proxy_request_duration_seconds_count`、`llm_proxy_ttft_seconds_*`、`llm_proxy_success_rate` 新增 `model` 标签；指标名不变。`llm_proxy_active_requests` 的标签和 `/admin/active-requests` 响应不变。
 
 删除：
 

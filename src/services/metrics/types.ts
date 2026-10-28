@@ -4,24 +4,30 @@ export interface TimeWindow {
 }
 
 export interface RequestCompleteData {
+  model: string
   backendId: string
   requestId: string
   status: 'success' | 'failure'
   duration: number
   ttft?: number
   streamType?: 'streaming' | 'non-streaming'
-  model?: string
   errorType?: string
 }
 
 export interface HistoryQueryParams {
-  backendId?: string
+  backend?: BackendIdentity
   startTime: Date
   endTime: Date
   limit?: number
 }
 
+export interface BackendIdentity {
+  model: string
+  backendId: string
+}
+
 export interface MetricsTotals {
+  model: string
   backend_id: string
   total: number
   success: number

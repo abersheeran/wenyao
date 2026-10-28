@@ -32,6 +32,7 @@ export async function scheduled(
     env.DB.prepare('DELETE FROM affinity_mappings WHERE last_accessed_at < ?').bind(
       now - 60 * 60_000
     ),
+    // Retention applies to every model/backend pair, using the shared minute index.
     env.DB.prepare('DELETE FROM backend_stats_minute WHERE minute < ?').bind(
       now - 30 * 24 * 60 * 60_000
     ),

@@ -181,39 +181,45 @@ admin.get('/stats', async (c) => {
     startTime: new Date(endTime.getTime() - 30_000),
     endTime,
   })
-  return c.json({ stats: Array.from(stats.values()) })
+  return c.json({ stats: Array.from(stats.values()).flatMap((backends) => [...backends.values()]) })
 })
 
-// History routes must precede /stats/:backendId.
+// History routes must precede /stats/:model/:backendId.
 admin.get('/stats/history', async (c) => {
   const endTime = c.req.query('endTime') ? new Date(c.req.query('endTime')!) : new Date()
   const startTime = c.req.query('startTime')
     ? new Date(c.req.query('startTime')!)
     : new Date(endTime.getTime() - 24 * 60 * 60 * 1000)
   const points = await new DbMetricsCollector(c.env.DB).getHistoricalStats({ startTime, endTime })
-  const history: Record<string, StatsDataPoint[]> = {}
-  for (const point of points) (history[point.backendId] ??= []).push(point)
+  const history: Record<string, Record<string, StatsDataPoint[]>> = Object.create(null)
+  for (const point of points) {
+    const backends = (history[point.model] ??= Object.create(null))
+    ;(backends[point.backendId] ??= []).push(point)
+  }
   return c.json({ history })
 })
 
-admin.get('/stats/history/:backendId', async (c) => {
+admin.get('/stats/history/:model/:backendId', async (c) => {
+  const model = c.req.param('model')
   const backendId = c.req.param('backendId')
   const endTime = c.req.query('endTime') ? new Date(c.req.query('endTime')!) : new Date()
   const startTime = c.req.query('startTime')
     ? new Date(c.req.query('startTime')!)
     : new Date(endTime.getTime() - 24 * 60 * 60 * 1000)
   const dataPoints = await new DbMetricsCollector(c.env.DB).getHistoricalStats({
-    backendId,
+    backend: { model, backendId },
     startTime,
     endTime,
   })
   if (!dataPoints.length)
     return c.json({
+      model,
       backendId,
       dataPoints: [],
       message: 'No historical data found for this backend',
     })
   return c.json({
+    model,
     backendId,
     dataPoints,
     startTime: dataPoints[0].timestamp,
@@ -221,16 +227,20 @@ admin.get('/stats/history/:backendId', async (c) => {
   })
 })
 
-admin.get('/stats/:backendId', async (c) => {
+admin.get('/stats/:model/:backendId', async (c) => {
+  const model = c.req.param('model')
   const backendId = c.req.param('backendId')
-  const stats = await new DbMetricsCollector(c.env.DB).getRecentStats(backendId, 30_000)
+  const stats = await new DbMetricsCollector(c.env.DB).getRecentStats(model, backendId, 30_000)
   if (!stats.totalRequests)
-    return c.json({ error: `No statistics found for backend ${backendId}` }, 404)
+    return c.json({ error: `No statistics found for backend ${model}/${backendId}` }, 404)
   return c.json({ stats })
 })
 
-admin.delete('/stats/:backendId', async (c) => {
-  const deletedCount = await new DbMetricsCollector(c.env.DB).resetStats(c.req.param('backendId'))
+admin.delete('/stats/:model/:backendId', async (c) => {
+  const deletedCount = await new DbMetricsCollector(c.env.DB).resetStats({
+    model: c.req.param('model'),
+    backendId: c.req.param('backendId'),
+  })
   return c.json({ message: 'Statistics reset successfully', deletedCount })
 })
 

@@ -4,11 +4,11 @@ import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Switch } from "../../ui/switch";
 import { Spinner } from "../../ui/spinner";
-import { useAdminApi, type StatsDataPoint } from "~/apis";
+import { useAdminApi, type HistoricalStatsData } from "~/apis";
 import { HistoricalCharts } from "./historical-charts";
 
 export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
-  const [historyData, setHistoryData] = React.useState<Record<string, StatsDataPoint[]>>({});
+  const [historyData, setHistoryData] = React.useState<HistoricalStatsData>({});
   const [timeRange, setTimeRange] = React.useState<string>("1h"); // 1h, 6h, 24h, 7d
   const [autoRefresh, setAutoRefresh] = React.useState<boolean>(false);
 
@@ -64,9 +64,9 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
     <div className="space-y-4">
       <div className="flex flex-col gap-2 md:flex-row md:items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold">历史趋势（多实例聚合）</h2>
+          <h2 className="text-xl font-semibold">历史趋势</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            数据按 1 分钟聚合，每个时间点显示该分钟内所有请求的统计指标
+            数据按模型与 Backend 每分钟聚合，以 model/backendId 标识
           </p>
         </div>
         <div className="flex items-center gap-3">

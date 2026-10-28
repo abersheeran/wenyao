@@ -21,7 +21,12 @@ import {
 } from './helpers.js'
 
 import type { ApiKey } from '../types/apikey.js'
-import type { ModelConfig, RecordedRequest } from '../types/backend.js'
+import type {
+  BackendStats,
+  ModelConfig,
+  RecordedRequest,
+  StatsDataPoint,
+} from '../types/backend.js'
 
 interface Recorded extends RecordedRequest {
   _id: string
@@ -374,6 +379,130 @@ describe('Request recording in D1 and R2', () => {
 })
 
 describe('Statistics APIs', () => {
+  it('separates proxy metrics for shared backend IDs across models and deletes only the requested pair', async () => {
+    const models = ['vendor/model.v1', 'other/model.v2%2F']
+    const backendId = 'azure'
+    await seed(
+      modelConfig({ model: models[0], backends: [createTestOpenAIBackend({ id: backendId })] }),
+      models
+    )
+    expect(
+      (
+        await admin(
+          '/models',
+          'POST',
+          modelConfig({
+            model: models[1],
+            backends: [createTestOpenAIBackend({ id: backendId })],
+          })
+        )
+      ).status
+    ).toBe(201)
+    upstream(async (request) => {
+      const body = (await request.json()) as { model: string }
+      return jsonResponse({ model: body.model }, body.model === models[0] ? 200 : 502)
+    })
+    expect((await proxy({ model: models[0] })).status).toBe(200)
+    expect((await proxy({ model: models[1] })).status).toBe(502)
+    expect(
+      (
+        await env.DB.prepare(
+          'SELECT model, backend_id, total, success, failure FROM backend_stats_minute ORDER BY model'
+        ).all()
+      ).results
+    ).toEqual([
+      { model: models[1], backend_id: backendId, total: 1, success: 0, failure: 1 },
+      { model: models[0], backend_id: backendId, total: 1, success: 1, failure: 0 },
+    ])
+    const all = (await (await admin('/stats')).json()) as { stats: BackendStats[] }
+    expect(
+      all.stats.map(({ model, backendId, totalRequests }) => ({ model, backendId, totalRequests }))
+    ).toEqual([models[1], models[0]].map((model) => ({ model, backendId, totalRequests: 1 })))
+    const history = (await (await admin('/stats/history')).json()) as {
+      history: Record<string, Record<string, StatsDataPoint[]>>
+    }
+    for (const model of models) {
+      expect(history.history[model][backendId]).toHaveLength(1)
+      expect(history.history[model][backendId][0]).toMatchObject({
+        model,
+        backendId,
+        totalRequests: 1,
+      })
+      const path = `${encodeURIComponent(model)}/${encodeURIComponent(backendId)}`
+      const statsResponse = await admin(`/stats/${path}`)
+      expect(statsResponse.status).toBe(200)
+      const stats = (await statsResponse.json()) as { stats: BackendStats }
+      expect(stats.stats).toMatchObject({
+        model,
+        backendId,
+        totalRequests: 1,
+        successfulRequests: model === models[0] ? 1 : 0,
+      })
+      const historicalResponse = await admin(`/stats/history/${path}`)
+      expect(historicalResponse.status).toBe(200)
+      const historical = (await historicalResponse.json()) as {
+        model: string
+        backendId: string
+        dataPoints: StatsDataPoint[]
+      }
+      expect(historical).toMatchObject({ model, backendId })
+      expect(historical.dataPoints).toHaveLength(1)
+      expect(historical.dataPoints[0]).toMatchObject({ model, backendId, totalRequests: 1 })
+    }
+    const path = `${encodeURIComponent(models[0])}/${backendId}`
+    const removed = (await (await admin(`/stats/${path}`, 'DELETE')).json()) as {
+      deletedCount: number
+    }
+    expect(removed.deletedCount).toBe(1)
+    await expectError(await admin(`/stats/${path}`), 404)
+    expect(await (await admin(`/stats/history/${path}`)).json()).toMatchObject({
+      model: models[0],
+      backendId,
+      dataPoints: [],
+    })
+    expect((await admin(`/stats/${encodeURIComponent(models[1])}/${backendId}`)).status).toBe(200)
+    const remaining = (await (await admin('/stats/history')).json()) as typeof history
+    expect(Object.keys(remaining.history)).toEqual([models[1]])
+    expect(await count('backend_stats_minute')).toBe(1)
+    expect((await admin('/stats', 'DELETE')).status).toBe(200)
+    expect(await count('backend_stats_minute')).toBe(0)
+  })
+
+  it('supports encoded slash parameters, colliding display names and prototype-like history keys', async () => {
+    const identities = [
+      { model: 'a/b.v1', backendId: 'c' },
+      { model: 'a', backendId: 'b.v1/c' },
+      { model: '__proto__', backendId: 'constructor' },
+      { model: 'constructor', backendId: '__proto__' },
+    ]
+    for (const { model, backendId } of identities) await insertStats(backendId, { model })
+    const all = (await (await admin('/stats/history')).json()) as {
+      history: Record<string, Record<string, StatsDataPoint[]>>
+    }
+    for (const { model, backendId } of identities) {
+      expect(all.history[model][backendId]).toHaveLength(1)
+      const path = `${encodeURIComponent(model)}/${encodeURIComponent(backendId)}`
+      expect(await (await admin(`/stats/${path}`)).json()).toMatchObject({
+        stats: { model, backendId },
+      })
+      expect(await (await admin(`/stats/history/${path}`)).json()).toMatchObject({
+        model,
+        backendId,
+        dataPoints: [{ model, backendId }],
+      })
+    }
+    expect((await admin('/stats/a/b.v1%2Fc', 'DELETE')).status).toBe(200)
+    expect(await count('backend_stats_minute')).toBe(3)
+    expect((await admin('/stats/a%2Fb.v1/c')).status).toBe(200)
+  })
+
+  it('removes the old single-parameter statistics routes', async () => {
+    await insertStats('b1')
+    for (const path of ['/stats/b1', '/stats/history/b1']) await expectError(await admin(path), 404)
+    await expectError(await admin('/stats/b1', 'DELETE'), 404)
+    expect(await count('backend_stats_minute')).toBe(1)
+  })
+
   it('returns and resets stats and history without instanceId', async () => {
     await insertStats('b1', {
       streamingSum: 300,
@@ -381,23 +510,27 @@ describe('Statistics APIs', () => {
       nonStreamingSum: 900,
       nonStreamingCount: 3,
     })
-    const stats = (await (await admin('/stats/b1')).json()) as {
+    const stats = (await (await admin(`/stats/${encodeURIComponent(MODEL)}/b1`)).json()) as {
       stats: { averageStreamingTTFT: number; averageNonStreamingTTFT: number }
     }
     expect(stats.stats.averageStreamingTTFT).toBe(150)
     expect(stats.stats.averageNonStreamingTTFT).toBe(300)
-    const history = (await (await admin('/stats/history/b1')).json()) as {
+    const history = (await (
+      await admin(`/stats/history/${encodeURIComponent(MODEL)}/b1`)
+    ).json()) as {
       dataPoints: Record<string, unknown>[]
     }
     expect(history.dataPoints).toHaveLength(1)
     expect(history.dataPoints[0]).not.toHaveProperty('instanceId')
     const allHistory = (await (await admin('/stats/history')).json()) as {
-      history: { b1: unknown[] }
+      history: Record<string, { b1: unknown[] }>
     }
-    expect(allHistory.history.b1).toHaveLength(1)
-    const removed = (await (await admin('/stats/b1', 'DELETE')).json()) as { deletedCount: number }
+    expect(allHistory.history[MODEL].b1).toHaveLength(1)
+    const removed = (await (
+      await admin(`/stats/${encodeURIComponent(MODEL)}/b1`, 'DELETE')
+    ).json()) as { deletedCount: number }
     expect(removed.deletedCount).toBe(1)
-    await expectError(await admin('/stats/b1'), 404)
+    await expectError(await admin(`/stats/${encodeURIComponent(MODEL)}/b1`), 404)
     await insertStats('b2')
     expect((await admin('/stats', 'DELETE')).status).toBe(200)
     expect(await count('backend_stats_minute')).toBe(0)
@@ -420,5 +553,101 @@ describe('Statistics APIs', () => {
     ])
       expect(text).toContain(name)
     expect(text).toContain('backend_id="b1"')
+    expect(text).toContain(`model="${MODEL}"`)
+  })
+
+  it('exports model labels for enabled pairs plus recent data without mixing shared backend IDs', async () => {
+    const model = 'vendor/model.v1'
+    await seed(
+      modelConfig({
+        model,
+        backends: [
+          createTestOpenAIBackend({ id: 'azure' }),
+          createTestOpenAIBackend({ id: 'idle', weight: 0 }),
+          createTestOpenAIBackend({ id: 'disabled', enabled: false }),
+          createTestOpenAIBackend({ id: 'recent-disabled', enabled: false }),
+        ],
+      })
+    )
+    expect(
+      (
+        await admin(
+          '/models',
+          'POST',
+          modelConfig({
+            model: 'other/model.v2',
+            backends: [createTestOpenAIBackend({ id: 'azure' })],
+          })
+        )
+      ).status
+    ).toBe(201)
+    await insertStats('azure', {
+      model,
+      total: 2,
+      success: 1,
+      failure: 1,
+      streamingSum: 300,
+      streamingCount: 2,
+      nonStreamingSum: 600,
+      nonStreamingCount: 3,
+    })
+    await insertStats('azure', { model: 'other/model.v2', total: 9, success: 9 })
+    await insertStats('recent-disabled', { model })
+    await insertStats('removed', { model: 'archived' })
+    await insertStats('stale', {
+      model: 'archived',
+      minute: Math.floor(Date.now() / 60_000) * 60_000 - 120_000,
+    })
+    const text = await (await admin('/metrics')).text()
+    const pairs = [
+      `model="${model}",backend_id="azure"`,
+      `model="${model}",backend_id="idle"`,
+      `model="${model}",backend_id="recent-disabled"`,
+      'model="other/model.v2",backend_id="azure"',
+      'model="archived",backend_id="removed"',
+    ]
+    for (const name of [
+      'llm_proxy_requests_total',
+      'llm_proxy_request_duration_seconds_count',
+      'llm_proxy_ttft_seconds_sum',
+      'llm_proxy_ttft_seconds_count',
+      'llm_proxy_success_rate',
+    ]) {
+      const lines = text.split('\n').filter((line) => line.startsWith(`${name}{`))
+      expect(lines).toHaveLength(
+        pairs.length * (name.includes('ttft') || name === 'llm_proxy_requests_total' ? 2 : 1)
+      )
+      for (const pair of pairs)
+        expect(lines.some((line) => line.startsWith(`${name}{${pair}`))).toBe(true)
+    }
+    expect(text).toContain(
+      `llm_proxy_requests_total{model="${model}",backend_id="azure",status="success"} 1`
+    )
+    expect(text).toContain(
+      'llm_proxy_requests_total{model="other/model.v2",backend_id="azure",status="success"} 9'
+    )
+    expect(text).toContain(
+      `llm_proxy_request_duration_seconds_count{model="${model}",backend_id="azure"} 2`
+    )
+    expect(text).toContain(
+      `llm_proxy_ttft_seconds_sum{model="${model}",backend_id="azure",stream_type="streaming"} 0.300`
+    )
+    expect(text).toContain(
+      `llm_proxy_ttft_seconds_count{model="${model}",backend_id="azure",stream_type="non-streaming"} 3`
+    )
+    expect(text).toContain(`llm_proxy_success_rate{model="${model}",backend_id="azure"} 0.5000`)
+    expect(text).toContain(
+      `llm_proxy_requests_total{model="${model}",backend_id="idle",status="success"} 0`
+    )
+    expect(text).not.toContain('backend_id="disabled"')
+    expect(text).not.toContain('backend_id="stale"')
+  })
+
+  it('escapes model and backend labels in Prometheus output', async () => {
+    await insertStats('back"\\\nend', { model: 'model"\\\nname' })
+    const text = await (await admin('/metrics')).text()
+    expect(text).toContain(
+      'llm_proxy_requests_total{model="model\\"\\\\\\nname",backend_id="back\\"\\\\\\nend",status="success"} 20'
+    )
   })
 })

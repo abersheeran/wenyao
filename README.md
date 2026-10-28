@@ -131,7 +131,9 @@ ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
 - backend 写入使用 `connectionId`，不接受内嵌 `openaiConfig` / `bedrockConfig` / `jevConfig`。模型和后端的管理响应不包含凭据；凭据只通过 `/admin/connections` 返回。connection 可设置并修改显示名称，provider（`openai` / `bedrock` / `jev`）必须与模型一致，被引用时删除返回 409，并列出 `model/backendId`。
 - 已部署实例应用 `0002_connections.sql` 时会自动合并已有内嵌连接并转换 backend；缺少有效内嵌配置的 backend 需要在管理面板中补选连接。
 - `ADMIN_APIKEYS` 必须配置。代理 key 缺失或无效返回 401，无权访问模型返回 403。代理 key 的 `lastUsedAt` 在同一 isolate 内最多每 60 秒写入一次。
-- 指标始终开启，按分钟汇总，保存 30 天。查询包含与时间窗口相交的分钟桶，因此不足一分钟的窗口仍可能包含整分钟的计数；TTFT 按流式、非流式分别使用 `sum / count`。负载均衡统计缓存 15 秒。
+- 指标始终开启，按「模型 + backend ID」分别进行分钟汇总，保存 30 天；backend ID 只在模型内唯一。stats 页以 `model/backendId` 显示并独立筛选。查询包含与时间窗口相交的分钟桶，因此不足一分钟的窗口仍可能包含整分钟的计数；TTFT 按流式、非流式分别使用 `sum / count`。负载均衡只使用本模型的统计，缓存 15 秒。
+- `0004_model_backend_stats.sql` 将旧指标归入当前配置中唯一对应的模型（包括禁用 backend）；多模型重名或孤立 ID 的旧数据丢弃。
+- 指标数据项新增 `model`。单 backend 指标查询、历史查询和删除路径分别为 `/admin/stats/:model/:backendId`、`/admin/stats/history/:model/:backendId`、`DELETE /admin/stats/:model/:backendId`，两个路径参数分别用 `encodeURIComponent`。全部历史返回 `{ history: { [model]: { [backendId]: StatsDataPoint[] } } }`；`DELETE /admin/stats` 仍清空全部。Prometheus 的请求、时长计数、TTFT 和成功率指标新增 `model` 标签，活跃请求指标不变。
 - 只有配置了 `maxConcurrentRequests > 0` 的后端才使用并发限制，每个后端一个 DO。每次尝试通过 `acquire`、`release` 两次 RPC 抢占和释放名额；DO 使用内置 SQLite 持久化，休眠或重启不会丢失计数，超过 30 分钟的名额在 `acquire` / `count` 时清理。DO 调用异常时记录日志并放行。长于 30 分钟的请求不再占用有效并发名额。
 - 未配置并发限制的后端不访问 DO，也不记录活跃请求；`/admin/active-requests` 和 Prometheus 的 `llm_proxy_active_requests` 只列出已启用且配置了限制的后端，计数来自对应 DO。
 - 会话亲和在最后一次成功访问 1 小时后过期，管理端查询不增加访问次数；清除映射立即生效。不存在、禁用或权重为 0 的后端映射会被忽略并删除。
@@ -140,5 +142,5 @@ ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
 - 非流式 2xx 响应会校验 JSON，非法 JSON 按失败计数并尝试下一个后端；合法 JSON 原始字节透传。
 - Cron 每 5 分钟清理过期的亲和映射和分钟指标。录制数据不会自动过期，删除录制时同时删除 D1 元数据及 R2 中的请求体、响应体。
 - 不再提供 `/admin/instances` 或 `/admin/instances/:instanceId/stats`，历史指标不再包含 `instanceId` 参数或字段；`/health` 不再返回 `instanceId`、`metricsEnabled`。
-- 管理业务错误统一为 JSON `{ "error": "..." }`：不存在为 404，已存在为 409，provider 不匹配为 400。其余保留接口的路径和响应形状不变，录制数据仍返回 `_id` 和 `body`。
+- 管理业务错误统一为 JSON `{ "error": "..." }`：不存在为 404，已存在为 409，provider 不匹配为 400。指标接口变化见上述条目；其余保留接口的路径和响应形状不变，录制数据仍返回 `_id` 和 `body`。
 - 运行配置只使用 Workers bindings 和 `ADMIN_APIKEYS`。原来的数据库连接、指标开关、实例 ID、端口等环境变量已删除。

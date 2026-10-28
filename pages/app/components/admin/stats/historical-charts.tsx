@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "../../ui/chart";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis, Line, LineChart } from "recharts";
-import type { StatsDataPoint } from "~/apis";
+import type { HistoricalStatsData } from "~/apis";
 import { Button } from "../../ui/button";
 
 // Generate a distinct color palette for any number of backends
@@ -13,109 +13,57 @@ const generateColor = (index: number, total: number): string => {
   return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 };
 
-export function HistoricalCharts({ historyData }: { historyData: Record<string, StatsDataPoint[]> }) {
-  // Sort backend IDs alphabetically and memoize based on actual keys change
-  const backendIdsKey = React.useMemo(() => {
-    return Object.keys(historyData).sort().join(',');
+export function HistoricalCharts({ historyData }: { historyData: HistoricalStatsData }) {
+  const backends = React.useMemo(() => {
+    const identities = Object.keys(historyData).sort().flatMap(model =>
+      Object.keys(historyData[model]).sort().map(backendId => ({ model, backendId }))
+    );
+    return identities.map(({ model, backendId }, index) => ({
+      model,
+      backendId,
+      // Tuple serialization is unambiguous even when either name contains a slash.
+      identity: JSON.stringify([model, backendId]),
+      // Recharts paths and chart CSS variables must never contain user-provided names.
+      key: `s${index}`,
+      label: `${model}/${backendId}`,
+      color: generateColor(index, identities.length),
+    }));
   }, [historyData]);
 
-  const backendIds = React.useMemo(() => {
-    return backendIdsKey.split(',').filter(id => id.length > 0);
-  }, [backendIdsKey]);
+  // Store exclusions so new backends start selected and refreshes retain user choices.
+  const [hiddenBackends, setHiddenBackends] = React.useState<Set<string>>(new Set());
+  const visibleBackends = backends.filter(backend => !hiddenBackends.has(backend.identity));
+  const allSelected = visibleBackends.length === backends.length;
 
-  const [selectedBackends, setSelectedBackends] = React.useState<Set<string>>(
-    new Set(backendIds)
-  );
-
-  // Update selected backends only when the actual backend IDs change
-  React.useEffect(() => {
-    setSelectedBackends((prev) => {
-      const currentIds = new Set(backendIds);
-
-      // First render - select all
-      if (prev.size === 0 && backendIds.length > 0) {
-        return currentIds;
-      }
-
-      // Keep existing selection, but remove backends that no longer exist
-      // and add new backends if they appear
-      const updated = new Set<string>();
-
-      // Keep previously selected backends that still exist
-      prev.forEach(id => {
-        if (currentIds.has(id)) {
-          updated.add(id);
-        }
-      });
-
-      // Auto-select new backends
-      backendIds.forEach(id => {
-        if (!prev.has(id)) {
-          updated.add(id);
-        }
-      });
-
-      return updated;
-    });
-  }, [backendIdsKey]);
-
-  // Generate distinct colors for each backend
-  const backendColors = React.useMemo(() => {
-    const colors: Record<string, string> = {};
-    backendIds.forEach((id, index) => {
-      colors[id] = generateColor(index, backendIds.length);
-    });
-    return colors;
-  }, [backendIdsKey]);
-
-  const toggleBackend = (backendId: string) => {
-    setSelectedBackends((prev) => {
+  const toggleBackend = (identity: string) => {
+    setHiddenBackends(prev => {
       const next = new Set(prev);
-      if (next.has(backendId)) {
-        next.delete(backendId);
-      } else {
-        next.add(backendId);
-      }
+      if (next.has(identity)) next.delete(identity);
+      else next.add(identity);
       return next;
     });
   };
 
   const toggleAll = () => {
-    if (selectedBackends.size === backendIds.length) {
-      setSelectedBackends(new Set());
-    } else {
-      setSelectedBackends(new Set(backendIds));
-    }
+    setHiddenBackends(allSelected ? new Set(backends.map(b => b.identity)) : new Set());
   };
 
-  // Filter backends based on selection
-  const visibleBackendIds = backendIds.filter((id) => selectedBackends.has(id));
-
-  // Prepare data for charts - merge all backends into single timeline
+  // Prepare data for charts - merge all backends into a single timeline.
   const mergedData = React.useMemo(() => {
-    const timeMap = new Map<string, any>();
-
-    backendIds.forEach((backendId) => {
-      const points = historyData[backendId] || [];
-      points.forEach(point => {
+    const timeMap = new Map<number, Record<string, number | string | Date>>();
+    backends.forEach(({ model, backendId, key }) => {
+      historyData[model][backendId].forEach(point => {
         const time = new Date(point.timestamp).getTime();
-        const timeKey = time.toString();
-
-        if (!timeMap.has(timeKey)) {
-          timeMap.set(timeKey, { time, timestamp: point.timestamp });
-        }
-
-        const entry = timeMap.get(timeKey)!;
-        entry[`successRate_${backendId}`] = point.successRate * 100;
-        entry[`streamingTtft_${backendId}`] = point.averageStreamingTTFT || 0;
-        entry[`nonStreamingTtft_${backendId}`] = point.averageNonStreamingTTFT || 0;
-        entry[`requests_${backendId}`] = point.totalRequests;
+        let entry = timeMap.get(time);
+        if (!entry) timeMap.set(time, (entry = { time, timestamp: point.timestamp }));
+        entry[`successRate_${key}`] = point.successRate * 100;
+        entry[`streamingTtft_${key}`] = point.averageStreamingTTFT || 0;
+        entry[`nonStreamingTtft_${key}`] = point.averageNonStreamingTTFT || 0;
+        entry[`requests_${key}`] = point.totalRequests;
       });
     });
-
-    const result = Array.from(timeMap.values()).sort((a, b) => a.time - b.time);
-    return result;
-  }, [backendIdsKey, historyData]);
+    return [...timeMap].sort(([a], [b]) => a - b).map(([, entry]) => entry);
+  }, [backends, historyData]);
 
   const formatTime = (timestamp: string | Date) => {
     const date = new Date(timestamp);
@@ -124,29 +72,14 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
 
   const chartConfig = React.useMemo(() => {
     const config: Record<string, { label: string; color: string }> = {};
-    backendIds.forEach((id) => {
-      const color = backendColors[id];
-      config[`successRate_${id}`] = {
-        label: id,
-        color: color,
-      };
-      // For streaming, use the base color with solid line
-      config[`streamingTtft_${id}`] = {
-        label: `${id} (流式)`,
-        color: color,
-      };
-      // For non-streaming, use a lighter/dashed variant
-      config[`nonStreamingTtft_${id}`] = {
-        label: `${id} (非流式)`,
-        color: color,
-      };
-      config[`requests_${id}`] = {
-        label: id,
-        color: color,
-      };
+    backends.forEach(({ key, label, color }) => {
+      config[`successRate_${key}`] = { label, color };
+      config[`streamingTtft_${key}`] = { label: `${label} (流式)`, color };
+      config[`nonStreamingTtft_${key}`] = { label: `${label} (非流式)`, color };
+      config[`requests_${key}`] = { label, color };
     });
     return config;
-  }, [backendIdsKey, backendColors]);
+  }, [backends]);
 
   return (
     <>
@@ -159,28 +92,29 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
             size="sm"
             onClick={toggleAll}
           >
-            {selectedBackends.size === backendIds.length ? '取消全选' : '全选'}
+            {allSelected ? '取消全选' : '全选'}
           </Button>
         </div>
         <div className="flex flex-wrap gap-2">
-          {backendIds.map((id) => (
+          {backends.map(({ identity, label, color }) => (
             <button
-              key={id}
-              onClick={() => toggleBackend(id)}
+              key={identity}
+              onClick={() => toggleBackend(identity)}
+              aria-pressed={!hiddenBackends.has(identity)}
               className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                selectedBackends.has(id)
+                !hiddenBackends.has(identity)
                   ? 'bg-white border-2 shadow-sm'
                   : 'bg-gray-200 border-2 border-transparent opacity-50'
               }`}
               style={{
-                borderColor: selectedBackends.has(id) ? backendColors[id] : 'transparent',
+                borderColor: !hiddenBackends.has(identity) ? color : 'transparent',
               }}
             >
               <span
                 className="w-3 h-3 rounded-full"
-                style={{ backgroundColor: backendColors[id] }}
+                style={{ backgroundColor: color }}
               />
-              <span>{id}</span>
+              <span>{label}</span>
             </button>
           ))}
         </div>
@@ -221,12 +155,11 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {visibleBackendIds.map((id) => {
-              const color = backendColors[id];
+            {visibleBackends.map(({ key, identity, color }) => {
               return (
                 <Line
-                  key={id}
-                  dataKey={`successRate_${id}`}
+                  key={identity}
+                  dataKey={`successRate_${key}`}
                   type="monotone"
                   stroke={color}
                   strokeWidth={2}
@@ -272,12 +205,11 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {visibleBackendIds.map((id) => {
-              const color = backendColors[id];
+            {visibleBackends.map(({ key, identity, color }) => {
               return (
                 <Line
-                  key={`streaming_${id}`}
-                  dataKey={`streamingTtft_${id}`}
+                  key={identity}
+                  dataKey={`streamingTtft_${key}`}
                   type="monotone"
                   stroke={color}
                   strokeWidth={2}
@@ -323,12 +255,11 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {visibleBackendIds.map((id) => {
-              const color = backendColors[id];
+            {visibleBackends.map(({ key, identity, color }) => {
               return (
                 <Line
-                  key={`nonStreaming_${id}`}
-                  dataKey={`nonStreamingTtft_${id}`}
+                  key={identity}
+                  dataKey={`nonStreamingTtft_${key}`}
                   type="monotone"
                   stroke={color}
                   strokeWidth={2}
@@ -373,12 +304,11 @@ export function HistoricalCharts({ historyData }: { historyData: Record<string, 
               cursor={false}
               content={<ChartTooltipContent indicator="dot" />}
             />
-            {visibleBackendIds.map((id) => {
-              const color = backendColors[id];
+            {visibleBackends.map(({ key, identity, color }) => {
               return (
                 <Area
-                  key={id}
-                  dataKey={`requests_${id}`}
+                  key={identity}
+                  dataKey={`requests_${key}`}
                   type="linear"
                   fill={color}
                   fillOpacity={0.25}

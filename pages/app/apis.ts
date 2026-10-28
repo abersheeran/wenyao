@@ -54,6 +54,7 @@ export type ModelConfig = {
 };
 
 export type BackendStats = {
+  model: string;
   backendId: string;
   totalRequests: number;
   successfulRequests: number;
@@ -65,6 +66,7 @@ export type BackendStats = {
 };
 
 export type StatsDataPoint = {
+  model: string;
   backendId: string;
   timestamp: string | Date;
   totalRequests: number;
@@ -76,7 +78,10 @@ export type StatsDataPoint = {
   requestsInPeriod: number;
 };
 
+export type HistoricalStatsData = Record<string, Record<string, StatsDataPoint[]>>;
+
 export type HistoricalStatsResponse = {
+  model: string;
   backendId: string;
   dataPoints: StatsDataPoint[];
   startTime?: string | Date;
@@ -320,13 +325,13 @@ export function useAdminApi() {
     },
 
     // Historical stats operations (near-realtime aggregated from D1)
-    async getHistoricalStats(backendId: string, startTime?: Date, endTime?: Date): Promise<HistoricalStatsResponse> {
+    async getHistoricalStats(model: string, backendId: string, startTime?: Date, endTime?: Date): Promise<HistoricalStatsResponse> {
       const params = new URLSearchParams();
       if (startTime) params.append('startTime', startTime.toISOString());
       if (endTime) params.append('endTime', endTime.toISOString());
 
       const queryString = params.toString();
-      const url = `${base}/stats/history/${encodeURIComponent(backendId)}${queryString ? `?${queryString}` : ''}`;
+      const url = `${base}/stats/history/${encodeURIComponent(model)}/${encodeURIComponent(backendId)}${queryString ? `?${queryString}` : ''}`;
 
       const res = await fetch(url, {
         headers: createAuthHeaders()
@@ -334,7 +339,7 @@ export function useAdminApi() {
       if (!res.ok) throw new Error("Failed to load historical stats");
       return await res.json();
     },
-    async getAllHistoricalStats(startTime?: Date, endTime?: Date): Promise<Record<string, StatsDataPoint[]>> {
+    async getAllHistoricalStats(startTime?: Date, endTime?: Date): Promise<HistoricalStatsData> {
       const params = new URLSearchParams();
       if (startTime) params.append('startTime', startTime.toISOString());
       if (endTime) params.append('endTime', endTime.toISOString());

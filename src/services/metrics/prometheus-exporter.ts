@@ -8,7 +8,9 @@ function label(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/"/g, '\\"')
 }
 
-/** Keep the existing Prometheus metric names and label sets. */
+/** Metric names stay stable; completed-request metrics include the model label.
+ * Active requests remain keyed only by backend ID, matching concurrency DOs.
+ */
 export class PrometheusExporter {
   constructor(
     private metrics: DbMetricsCollector,
@@ -23,21 +25,33 @@ export class PrometheusExporter {
         startTime: new Date(now - 60_000),
         endTime: new Date(now),
       }),
-      this.db.prepare('SELECT config FROM models ORDER BY model').all<{ config: string }>(),
+      this.db
+        .prepare('SELECT model, config FROM models ORDER BY model')
+        .all<{ model: string; config: string }>(),
     ])
-    const statsMap = new Map(totals.map((row) => [row.backend_id, row]))
-    const backendIds = new Set<string>()
+    const statsMap = new Map<string, Map<string, MetricsTotals | undefined>>()
+    for (const row of totals) {
+      let backends = statsMap.get(row.model)
+      if (!backends) statsMap.set(row.model, (backends = new Map()))
+      backends.set(row.backend_id, row)
+    }
     const limitedBackendIds = new Set<string>()
     for (const row of models.results) {
       const model = JSON.parse(row.config) as ModelConfig
       for (const backend of model.backends) {
-        if (backend.enabled) backendIds.add(backend.id)
+        if (backend.enabled) {
+          let backends = statsMap.get(row.model)
+          if (!backends) statsMap.set(row.model, (backends = new Map()))
+          if (!backends.has(backend.id)) backends.set(backend.id, undefined)
+        }
         if (backend.enabled && (backend.maxConcurrentRequests ?? 0) > 0) {
           limitedBackendIds.add(backend.id)
         }
       }
     }
-    for (const row of totals) backendIds.add(row.backend_id)
+    const backends = [...statsMap].flatMap(([model, stats]) =>
+      [...stats].map(([backendId, totals]) => ({ model, backendId, stats: totals }))
+    )
     const limiter = new ConcurrencyLimiter(this.concurrency)
     const activeCounts = new Map(
       await Promise.all(
@@ -52,11 +66,10 @@ export class PrometheusExporter {
       '# HELP llm_proxy_requests_total Total number of requests per backend',
       '# TYPE llm_proxy_requests_total counter',
     ]
-    for (const backendId of backendIds) {
-      const stats = statsMap.get(backendId)
+    for (const { model, backendId, stats } of backends) {
       lines.push(
-        `llm_proxy_requests_total{backend_id="${label(backendId)}",status="success"} ${stats?.success ?? 0}`,
-        `llm_proxy_requests_total{backend_id="${label(backendId)}",status="failure"} ${stats?.failure ?? 0}`
+        `llm_proxy_requests_total{model="${label(model)}",backend_id="${label(backendId)}",status="success"} ${stats?.success ?? 0}`,
+        `llm_proxy_requests_total{model="${label(model)}",backend_id="${label(backendId)}",status="failure"} ${stats?.failure ?? 0}`
       )
     }
 
@@ -65,9 +78,9 @@ export class PrometheusExporter {
       '# HELP llm_proxy_request_duration_seconds Request duration in seconds',
       '# TYPE llm_proxy_request_duration_seconds histogram'
     )
-    for (const backendId of backendIds) {
+    for (const { model, backendId, stats } of backends) {
       lines.push(
-        `llm_proxy_request_duration_seconds_count{backend_id="${label(backendId)}"} ${statsMap.get(backendId)?.total ?? 0}`
+        `llm_proxy_request_duration_seconds_count{model="${label(model)}",backend_id="${label(backendId)}"} ${stats?.total ?? 0}`
       )
     }
 
@@ -76,10 +89,9 @@ export class PrometheusExporter {
       '# HELP llm_proxy_ttft_seconds Time to first token in seconds',
       '# TYPE llm_proxy_ttft_seconds histogram'
     )
-    for (const backendId of backendIds) {
-      const stats = statsMap.get(backendId)
-      this.addTTFT(lines, backendId, 'streaming', stats)
-      this.addTTFT(lines, backendId, 'non-streaming', stats)
+    for (const { model, backendId, stats } of backends) {
+      this.addTTFT(lines, model, backendId, 'streaming', stats)
+      this.addTTFT(lines, model, backendId, 'non-streaming', stats)
     }
 
     lines.push(
@@ -87,11 +99,10 @@ export class PrometheusExporter {
       '# HELP llm_proxy_success_rate Success rate per backend (0.0 to 1.0)',
       '# TYPE llm_proxy_success_rate gauge'
     )
-    for (const backendId of backendIds) {
-      const stats = statsMap.get(backendId)
+    for (const { model, backendId, stats } of backends) {
       const successRate = stats && stats.total > 0 ? stats.success / stats.total : 1
       lines.push(
-        `llm_proxy_success_rate{backend_id="${label(backendId)}"} ${successRate.toFixed(4)}`
+        `llm_proxy_success_rate{model="${label(model)}",backend_id="${label(backendId)}"} ${successRate.toFixed(4)}`
       )
     }
 
@@ -111,6 +122,7 @@ export class PrometheusExporter {
 
   private addTTFT(
     lines: string[],
+    model: string,
     backendId: string,
     streamType: 'streaming' | 'non-streaming',
     stats?: MetricsTotals
@@ -119,7 +131,7 @@ export class PrometheusExporter {
       streamType === 'streaming' ? stats?.streaming_ttft_sum : stats?.non_streaming_ttft_sum
     const count =
       streamType === 'streaming' ? stats?.streaming_ttft_count : stats?.non_streaming_ttft_count
-    const labels = `backend_id="${label(backendId)}",stream_type="${streamType}"`
+    const labels = `model="${label(model)}",backend_id="${label(backendId)}",stream_type="${streamType}"`
     lines.push(
       `llm_proxy_ttft_seconds_sum{${labels}} ${((sum ?? 0) / 1000).toFixed(3)}`,
       `llm_proxy_ttft_seconds_count{${labels}} ${count ?? 0}`
