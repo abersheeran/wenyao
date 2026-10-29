@@ -296,7 +296,11 @@ CREATE TABLE slots (
   - 键盘操作：在非输入位置按 `/` 聚焦搜索框；在搜索框中用上下方向键移动高亮，按 Enter 选中高亮项（默认第一项）。
 - **右栏：模型详情**
   - 显示模型名、provider、负载均衡策略、是否开启亲和，提供编辑和删除模型的操作。
-  - backend 表格包含原有的全部信息和操作，可以添加 backend。为了在常见桌面宽度下不用横向滚动就能看到所有操作，列合并为：启用开关 | backend（ID 与所用 connection）| 权重（权重与流量占比）| 限制（最大并发、TTFT 超时）| 录制（请求、响应开关）| 操作（编辑、删除）。
+  - backend 表格包含原有的全部信息和操作，可以添加 backend。为了在常见桌面宽度下不用横向滚动就能看到所有操作，列合并为：顺序（拖动手柄与序号）| 启用开关 | backend（ID 与所用 connection）| 权重（权重与流量占比）| 限制（最大并发、TTFT 超时）| 录制（请求、响应开关）| 操作（编辑、删除）。
+  - 表格顺序就是回退顺序，可以拖动调整：
+    - 只能拖动行首的手柄，序号从 1 开始。鼠标、触屏和键盘都可以操作：键盘聚焦手柄后，按空格拿起，方向键移动，再按空格放下，按 Esc 取消。只有一个 backend 时手柄不可用。
+    - 松开后表格立即显示新顺序并保存，不需要另外确认。保存期间不能再次拖动；保存失败时显示错误，并恢复为服务器上的顺序。
+    - 只改变顺序，不修改 backend 的其他字段，不影响会话亲和。
   - 表格上方说明失败回退规则：摘要一句常显，完整规则可展开。权重为 0 的已启用 backend 在权重列标注「仅回退」。回退规则如下：
     - 首个 backend 只从已启用且权重大于 0 的 backend 中选择。开启亲和时优先用会话绑定的 backend，否则按负载均衡策略选择；请求头 `X-Backend-ID` 可以直接指定。
     - 以下情况视为失败：上游返回非 2xx、网络错误、TTFT 超时、非流式响应不是合法 JSON、达到最大并发。失败后，从该 backend 之后按表格顺序依次尝试其余已启用的 backend，到末尾后从头继续，每个最多尝试一次。
@@ -306,7 +310,7 @@ CREATE TABLE slots (
   - 保存在 URL 查询参数 `?model=` 中，刷新或分享链接后保持；切换模型会产生浏览历史，可以用后退回到上一个模型。
   - 未指定或模型不存在时，桌面宽度下显示列表中的第一个模型。
   - 新增模型后选中它；删除当前模型后清除选中。
-  - 在 backend 上切换开关或编辑、删除后，选中状态和搜索词保持不变。
+  - 在 backend 上切换开关、调整顺序或编辑、删除后，选中状态和搜索词保持不变。
 - **窄屏**：未选中模型时只显示列表；选中后只显示详情，顶部有返回列表的链接。
 
 ### 5.10 System One API（Jev）
@@ -371,6 +375,10 @@ Jev 是 TypeSafe 的决策模型，官方接口是 TypeSafe 的 System One API�
 - `/admin/active-requests` 和 Prometheus 的 `llm_proxy_active_requests` 只包含配置了并发限制的后端，计数来自各 backend DO 的 `count()` RPC。未配置限制的后端不再统计活跃请求。
 - 后端配置新增 `recordResponses`。`/admin/recorded-requests` 的每条记录新增 `response` 字段（见 5.5），原有字段不变。
 - 新增 provider `jev` 和代理接口 `POST /v1/systemone`，按 TypeSafe 官方 System One API 的格式代理 Jev（见 5.10）。connection 新增 `jevConfig`。
+- 新增 `PUT /admin/models/:model/backend-order`，用于调整 backend 顺序（即回退顺序，见 5.9）：
+  - 请求体为 `{ backendIds }`，按新顺序列出该模型当前的全部 backend ID，每个恰好一次。返回 `{ model }`，与其他 backend 写入接口相同。
+  - 列表为空或有重复 ID 时返回 400；模型不存在时返回 404；与模型当前的 backend 不一致时（缺少、多出或未知 ID，例如期间有人增删了 backend）返回 409。
+  - 只改变顺序，不修改 backend 的其他字段，也不重新校验 connection，因此未设置 connection 的遗留 backend 不会阻塞排序。与其他模型写入一样使用比较并交换，写入后失效当前 isolate 的配置缓存。
 - 新增 `/admin/connections` 的 CRUD（见 5.8）。**不兼容变更**：创建和更新 backend（包括通过模型的 `backends` 数组写入）时，用 `connectionId` 代替 `openaiConfig` / `bedrockConfig`。缺少 `connectionId` 的创建请求返回 400。模型和 backend 的响应不再包含凭据。
 
 ## 7. 部署

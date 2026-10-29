@@ -303,6 +303,150 @@ describe('Management CRUD persists to D1', () => {
   })
 })
 
+describe('Backend fallback order', () => {
+  it('persists reordered stored objects without changing backend fields or affinity', async () => {
+    await seed(
+      modelConfig({
+        enableAffinity: true,
+        backends: [
+          createTestOpenAIBackend({
+            model: 'upstream-model',
+            weight: 7,
+            streamingTTFTTimeout: 1200,
+            nonStreamingTTFTTimeout: 2300,
+            recordRequests: true,
+            recordResponses: true,
+            maxConcurrentRequests: 4,
+          }),
+          createTestOpenAIBackend({ id: 'b2', connectionId: 'openai-second', weight: 0 }),
+          createTestOpenAIBackend({ id: 'order', enabled: false }),
+        ],
+      })
+    )
+    await insertAffinity('keep-session', 'b1')
+    const before = await env.DB.prepare('SELECT config FROM models WHERE model = ?')
+      .bind(MODEL)
+      .first<{ config: string }>()
+    const original = JSON.parse(before!.config) as ModelConfig
+    const expected = {
+      ...original,
+      backends: [original.backends[2], original.backends[0], original.backends[1]],
+    }
+    const response = await admin(`/models/${MODEL}/backend-order`, 'PUT', {
+      backendIds: ['order', 'b1', 'b2'],
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ model: expected })
+    const stored = await env.DB.prepare('SELECT config FROM models WHERE model = ?')
+      .bind(MODEL)
+      .first<{ config: string }>()
+    expect(JSON.parse(stored!.config)).toEqual(expected)
+    expect(await count('affinity_mappings')).toBe(1)
+    // A backend named "order" still has an independent backend update route.
+    expect((await admin(`/models/${MODEL}/backends/order`, 'PUT', { weight: 2 })).status).toBe(200)
+  })
+
+  it('does not revalidate an unchanged legacy backend without a connection', async () => {
+    const config = modelConfig({
+      backends: [
+        createTestOpenAIBackend({ connectionId: undefined }),
+        createTestOpenAIBackend({ id: 'b2', connectionId: undefined, weight: 0 }),
+      ],
+    })
+    await env.DB.prepare('INSERT INTO models (model, config) VALUES (?, ?)')
+      .bind(MODEL, JSON.stringify(config))
+      .run()
+    const response = await admin(`/models/${MODEL}/backend-order`, 'PUT', {
+      backendIds: ['b2', 'b1'],
+    })
+    expect(response.status).toBe(200)
+    const expected = JSON.parse(
+      JSON.stringify({ ...config, backends: [...config.backends].reverse() })
+    )
+    expect(await response.json()).toEqual({ model: expected })
+    const stored = await env.DB.prepare('SELECT config FROM models WHERE model = ?')
+      .bind(MODEL)
+      .first<{ config: string }>()
+    expect(JSON.parse(stored!.config)).toEqual(expected)
+  })
+
+  it.each([{ backendIds: [] }, { backendIds: ['b1', 'b1'] }])(
+    'rejects an empty or duplicate ID list: %j',
+    async (body) => {
+      await seed()
+      const response = await admin(`/models/${MODEL}/backend-order`, 'PUT', body)
+      expect(response.status).toBe(400)
+      expect(response.headers.get('content-type')).toContain('application/json')
+    }
+  )
+
+  it('returns 404 for an unknown model', async () => {
+    await expectError(
+      await admin('/models/missing/backend-order', 'PUT', { backendIds: ['b1'] }),
+      404
+    )
+  })
+
+  it.each([
+    { backendIds: ['b1'] },
+    { backendIds: ['b1', 'b2', 'extra'] },
+    { backendIds: ['b1', 'unknown'] },
+  ])('returns 409 for IDs that do not match current backends: %j', async (body) => {
+    await seed(
+      modelConfig({ backends: [createTestOpenAIBackend(), createTestOpenAIBackend({ id: 'b2' })] })
+    )
+    const before = await env.DB.prepare('SELECT config FROM models WHERE model = ?')
+      .bind(MODEL)
+      .first<{ config: string }>()
+    await expectError(await admin(`/models/${MODEL}/backend-order`, 'PUT', body), 409)
+    const after = await env.DB.prepare('SELECT config FROM models WHERE model = ?')
+      .bind(MODEL)
+      .first<{ config: string }>()
+    expect(after).toEqual(before)
+  })
+
+  it('preserves a backend edit made concurrently with reordering', async () => {
+    await seed(
+      modelConfig({ backends: [createTestOpenAIBackend(), createTestOpenAIBackend({ id: 'b2' })] })
+    )
+    const responses = await Promise.all([
+      admin(`/models/${MODEL}/backend-order`, 'PUT', { backendIds: ['b2', 'b1'] }),
+      admin(`/models/${MODEL}/backends/b1`, 'PUT', { weight: 7 }),
+    ])
+    expect(responses.map((response) => response.status)).toEqual([200, 200])
+    const stored = await env.DB.prepare('SELECT config FROM models WHERE model = ?')
+      .bind(MODEL)
+      .first<{ config: string }>()
+    expect(JSON.parse(stored!.config).backends).toMatchObject([
+      { id: 'b2' },
+      { id: 'b1', weight: 7 },
+    ])
+  })
+
+  it('invalidates the proxy cache so fallback follows the new order and wraps around', async () => {
+    await seed(
+      modelConfig({
+        backends: ['b1', 'b2', 'b3'].map((id) => createTestOpenAIBackend({ id, model: id })),
+      })
+    )
+    const calls: string[] = []
+    upstream(async (req) => {
+      const body = (await req.json()) as { model: string }
+      calls.push(body.model)
+      return jsonResponse({ error: 'try-next' }, 500)
+    })
+    expect((await proxy({}, { 'X-Backend-ID': 'b1' })).status).toBe(500)
+    expect(calls).toEqual(['b1', 'b2', 'b3'])
+    expect(
+      (await admin(`/models/${MODEL}/backend-order`, 'PUT', { backendIds: ['b3', 'b2', 'b1'] }))
+        .status
+    ).toBe(200)
+    calls.length = 0
+    expect((await proxy({}, { 'X-Backend-ID': 'b1' })).status).toBe(500)
+    expect(calls).toEqual(['b1', 'b3', 'b2'])
+  })
+})
+
 describe('Affinity management', () => {
   it('lists, filters and clears persistent mappings', async () => {
     await seed(modelConfig({ enableAffinity: true }))

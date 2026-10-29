@@ -127,6 +127,7 @@ ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
 
 ## 限制与行为
 
+- `PUT /admin/models/:model/backend-order` 接受 `{ backendIds: string[] }` 调整回退顺序；须恰好包含当前全部 backend ID，空列表或重复返回 400，模型不存在返回 404，缺少、多出或未知 ID 返回 409；仅改变顺序，保留 backend 其他字段。
 - 模型、connection 和代理 API key 在每个 isolate 内缓存 10 秒；connection 修改（包括轮换凭据）对所有引用它的 backend 生效，其他 isolate 最多 10 秒后看到变更。管理 API 直接读写 D1，写入后立即使当前 isolate 的配置缓存失效。
 - backend 写入使用 `connectionId`，不接受内嵌 `openaiConfig` / `bedrockConfig` / `jevConfig`。模型和后端的管理响应不包含凭据；凭据只通过 `/admin/connections` 返回。connection 可设置并修改显示名称，provider（`openai` / `bedrock` / `jev`）必须与模型一致，被引用时删除返回 409，并列出 `model/backendId`。
 - 已部署实例应用 `0002_connections.sql` 时会自动合并已有内嵌连接并转换 backend；缺少有效内嵌配置的 backend 需要在管理面板中补选连接。

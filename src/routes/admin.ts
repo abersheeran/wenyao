@@ -11,6 +11,7 @@ import {
   createModelConfigSchema,
   modelAndBackendParamSchema,
   modelParamSchema,
+  reorderBackendsSchema,
   updateBackendInModelSchema,
   updateModelConfigSchema,
 } from '../schemas/backend.js'
@@ -148,6 +149,20 @@ admin.post(
     const { model } = c.req.valid('param')
     const config = await new ConfigManager(c.env.DB).addBackendToModel(model, c.req.valid('json'))
     return c.json({ model: config }, 201)
+  }
+)
+
+admin.put(
+  '/models/:model/backend-order',
+  zValidator('param', modelParamSchema),
+  zValidator('json', reorderBackendsSchema),
+  async (c) => {
+    const { model } = c.req.valid('param')
+    const config = await new ConfigManager(c.env.DB).reorderBackends(
+      model,
+      c.req.valid('json').backendIds
+    )
+    return c.json({ model: config })
   }
 )
 

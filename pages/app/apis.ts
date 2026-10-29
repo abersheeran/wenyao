@@ -270,6 +270,19 @@ export function useAdminApi() {
     },
 
     // Backend operations within models
+    async reorderBackends(model: string, backendIds: string[]): Promise<ModelConfig> {
+      const res = await fetch(`${base}/models/${encodeURIComponent(model)}/backend-order`, {
+        method: "PUT",
+        headers: createAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ backendIds }),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to reorder backends");
+      }
+      const data = await res.json();
+      return data.model;
+    },
     async listBackends(model: string): Promise<(BackendConfig & { trafficRatio: number })[]> {
       const res = await fetch(`${base}/models/${encodeURIComponent(model)}/backends`, {
         headers: createAuthHeaders()

@@ -314,6 +314,20 @@ export class ConfigManager {
     })
   }
 
+  async reorderBackends(model: string, backendIds: string[]): Promise<ModelConfig> {
+    return this.mutateModel(model, (config) => {
+      const byId = new Map(config.backends.map((backend) => [backend.id, backend]))
+      if (
+        backendIds.length !== config.backends.length ||
+        new Set(backendIds).size !== backendIds.length ||
+        backendIds.some((id) => !byId.has(id))
+      ) {
+        throw new BusinessError(`Backend IDs do not match current backends for model ${model}`, 409)
+      }
+      return { ...config, backends: backendIds.map((id) => byId.get(id)!) }
+    })
+  }
+
   async updateBackendInModel(
     model: string,
     backendId: string,

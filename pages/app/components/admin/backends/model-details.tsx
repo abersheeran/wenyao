@@ -1,4 +1,8 @@
-import { Pencil, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
+import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { GripVertical, Pencil, Trash2 } from "lucide-react";
 import type { BackendConfig, Connection, LoadBalancingStrategy, ModelConfig, useAdminApi } from "~/apis";
 import { getProviderBadgeClass, getProviderDisplayName } from "../../../config/provider-config";
 import { Button } from "../../ui/button";
@@ -18,7 +22,45 @@ type ModelDetailsProps = {
   onUpdateEnabled: (model: string, backendId: string, value: boolean) => void;
   onUpdateRecordRequests: (model: string, backendId: string, value: boolean) => void;
   onUpdateRecordResponses: (model: string, backendId: string, value: boolean) => void;
+  onReorderBackends: (model: string, from: number, to: number) => void;
+  reordering: boolean;
 };
+
+function SortableBackendRow({ id, position, disabled, children }: {
+  id: string;
+  position: number;
+  disabled: boolean;
+  children: ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id, disabled });
+
+  return (
+    <TableRow
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={isDragging ? "relative z-10 bg-blue-50 opacity-70 shadow-lg outline outline-blue-200" : undefined}
+    >
+      <TableCell>
+        <div className="flex items-center gap-1">
+          {/* attributes set aria-disabled; a native disabled would drop keyboard focus during a save. */}
+          <Button
+            ref={setActivatorNodeRef}
+            variant="ghost"
+            size="icon-sm"
+            className="size-6 shrink-0 touch-none cursor-grab active:cursor-grabbing aria-disabled:cursor-default aria-disabled:opacity-50"
+            {...attributes}
+            {...listeners}
+            aria-label={`Reorder backend ${id}`}
+          >
+            <GripVertical className="size-4" aria-hidden="true" />
+          </Button>
+          <span className="text-xs tabular-nums text-gray-500">{position}</span>
+        </div>
+      </TableCell>
+      {children}
+    </TableRow>
+  );
+}
 
 function formatTimeout(ms: number): string {
   return ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`;
@@ -41,7 +83,13 @@ export function ModelDetails({
   onUpdateEnabled,
   onUpdateRecordRequests,
   onUpdateRecordResponses,
+  onReorderBackends,
+  reordering,
 }: ModelDetailsProps) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
   const strategy = strategyLabels[model.loadBalancingStrategy] ?? {
     text: model.loadBalancingStrategy,
     color: "bg-gray-100 text-gray-800",
@@ -101,104 +149,120 @@ export function ModelDetails({
                 </ul>
               </details>
             </div>
-            <Table aria-label={`Backends for ${model.model}`}>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-16">Enabled</TableHead>
-                  <TableHead>Backend</TableHead>
-                  <TableHead>Weight</TableHead>
-                  <TableHead>Limits</TableHead>
-                  <TableHead>Recording</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {backends.map((backend) => {
-                  const connection = connections.find((item) => item.id === backend.connectionId);
-                  const streaming = backend.streamingTTFTTimeout ?? 0;
-                  const nonStreaming = backend.nonStreamingTTFTTimeout ?? 0;
-                  return (
-                    <TableRow key={backend.id}>
-                      <TableCell>
-                        <Switch
-                          aria-label={`Enable backend ${backend.id}`}
-                          checked={backend.enabled}
-                          onCheckedChange={(checked) => onUpdateEnabled(model.model, backend.id, checked)}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <div className="font-mono text-sm">{backend.id}</div>
-                        <div className="text-xs text-gray-500" title="Connection">
-                          {connection?.name || backend.connectionId || <span className="text-amber-700">Connection not configured</span>}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-sm">{backend.weight}</div>
-                        {backend.enabled && backend.weight === 0 ? (
-                          <div className="text-xs text-amber-700" title="权重为 0：不会被首选，只在回退时使用">仅回退</div>
-                        ) : (
-                          <div className="text-xs text-gray-500" title="流量占比">{(backend.trafficRatio * 100).toFixed(1)}%</div>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-sm" title="最大并发请求数">
-                          并发 {backend.maxConcurrentRequests ? backend.maxConcurrentRequests : "∞"}
-                        </div>
-                        <div className="text-xs text-gray-500" title="TTFT 超时">
-                          TTFT {streaming || nonStreaming
-                            ? [streaming && `流式 ${formatTimeout(streaming)}`, nonStreaming && `非流式 ${formatTimeout(nonStreaming)}`].filter(Boolean).join(" · ")
-                            : "-"}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1.5 text-xs">
-                          <label className="inline-flex items-center gap-2">
+            <p className="text-xs text-gray-500">表格顺序就是回退顺序，可以拖动手柄调整；键盘聚焦手柄后按空格拿起，方向键移动，空格放下，Esc 取消。</p>
+            <DndContext
+              key={model.model}
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={({ active, over }) => {
+                if (reordering || !over || active.id === over.id) return;
+                const from = backends.findIndex(backend => backend.id === active.id);
+                const to = backends.findIndex(backend => backend.id === over.id);
+                if (from !== -1 && to !== -1) onReorderBackends(model.model, from, to);
+              }}
+            >
+              <Table aria-label={`Backends for ${model.model}`}>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-14">顺序</TableHead>
+                    <TableHead className="w-16">Enabled</TableHead>
+                    <TableHead>Backend</TableHead>
+                    <TableHead>Weight</TableHead>
+                    <TableHead>Limits</TableHead>
+                    <TableHead>Recording</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <SortableContext items={backends.map(backend => backend.id)} strategy={verticalListSortingStrategy}>
+                  <TableBody>
+                    {backends.map((backend, index) => {
+                      const connection = connections.find((item) => item.id === backend.connectionId);
+                      const streaming = backend.streamingTTFTTimeout ?? 0;
+                      const nonStreaming = backend.nonStreamingTTFTTimeout ?? 0;
+                      return (
+                        <SortableBackendRow key={backend.id} id={backend.id} position={index + 1} disabled={reordering || backends.length < 2}>
+                          <TableCell>
                             <Switch
-                              aria-label={`Record requests for ${backend.id}`}
-                              checked={backend.recordRequests ?? false}
-                              onCheckedChange={(checked) => onUpdateRecordRequests(model.model, backend.id, checked)}
+                              aria-label={`Enable backend ${backend.id}`}
+                              checked={backend.enabled}
+                              onCheckedChange={(checked) => onUpdateEnabled(model.model, backend.id, checked)}
                             />
-                            请求
-                          </label>
-                          <label className={`inline-flex items-center gap-2 ${backend.recordRequests ? "" : "text-gray-400"}`}>
-                            <Switch
-                              aria-label={`Record responses for ${backend.id}`}
-                              checked={backend.recordResponses ?? false}
-                              disabled={!backend.recordRequests}
-                              onCheckedChange={(checked) => onUpdateRecordResponses(model.model, backend.id, checked)}
-                            />
-                            响应
-                          </label>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="inline-flex gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`Edit backend ${backend.id}`}
-                            title="Edit"
-                            onClick={() => onEditBackend(model.model, backend)}
-                          >
-                            <Pencil />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`Delete backend ${backend.id}`}
-                            title="Delete"
-                            className="text-red-600 hover:text-red-700"
-                            onClick={() => onDeleteBackend(model.model, backend.id)}
-                          >
-                            <Trash2 />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+                          </TableCell>
+                          <TableCell className="whitespace-normal break-words">
+                            <div className="font-mono text-sm">{backend.id}</div>
+                            <div className="text-xs text-gray-500" title="Connection">
+                              {connection?.name || backend.connectionId || <span className="text-amber-700">Connection not configured</span>}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="text-sm">{backend.weight}</div>
+                            {backend.enabled && backend.weight === 0 ? (
+                              <div className="text-xs text-amber-700" title="权重为 0：不会被首选，只在回退时使用">仅回退</div>
+                            ) : (
+                              <div className="text-xs text-gray-500" title="流量占比">{(backend.trafficRatio * 100).toFixed(1)}%</div>
+                            )}
+                          </TableCell>
+                          <TableCell className="whitespace-normal">
+                            <div className="text-sm" title="最大并发请求数">
+                              并发 {backend.maxConcurrentRequests ? backend.maxConcurrentRequests : "∞"}
+                            </div>
+                            <div className="text-xs text-gray-500" title="TTFT 超时">
+                              TTFT {streaming || nonStreaming
+                                ? [streaming && `流式 ${formatTimeout(streaming)}`, nonStreaming && `非流式 ${formatTimeout(nonStreaming)}`].filter(Boolean).join(" · ")
+                                : "-"}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-col gap-1.5 text-xs">
+                              <label className="inline-flex items-center gap-2">
+                                <Switch
+                                  aria-label={`Record requests for ${backend.id}`}
+                                  checked={backend.recordRequests ?? false}
+                                  onCheckedChange={(checked) => onUpdateRecordRequests(model.model, backend.id, checked)}
+                                />
+                                请求
+                              </label>
+                              <label className={`inline-flex items-center gap-2 ${backend.recordRequests ? "" : "text-gray-400"}`}>
+                                <Switch
+                                  aria-label={`Record responses for ${backend.id}`}
+                                  checked={backend.recordResponses ?? false}
+                                  disabled={!backend.recordRequests}
+                                  onCheckedChange={(checked) => onUpdateRecordResponses(model.model, backend.id, checked)}
+                                />
+                                响应
+                              </label>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="inline-flex gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={`Edit backend ${backend.id}`}
+                                title="Edit"
+                                onClick={() => onEditBackend(model.model, backend)}
+                              >
+                                <Pencil />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={`Delete backend ${backend.id}`}
+                                title="Delete"
+                                className="text-red-600 hover:text-red-700"
+                                onClick={() => onDeleteBackend(model.model, backend.id)}
+                              >
+                                <Trash2 />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </SortableBackendRow>
+                      );
+                    })}
+                  </TableBody>
+                </SortableContext>
+              </Table>
+            </DndContext>
           </>
         )}
       </div>

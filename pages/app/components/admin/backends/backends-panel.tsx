@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link, useSearchParams } from "react-router";
 import { ArrowLeft } from "lucide-react";
+import { arrayMove } from "@dnd-kit/sortable";
 import useAsyncFn from 'react-use/lib/useAsyncFn';
 import { Button } from "../../ui/button";
 import { Spinner } from "../../ui/spinner";
@@ -101,13 +102,29 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
     [api, load]
   );
 
+  const [reorderState, reorderBackends] = useAsyncFn(
+    async (model: string, from: number, to: number) => {
+      const current = models.find(item => item.model === model);
+      if (!current) return;
+      const backends = arrayMove(current.backends, from, to);
+      setModels(items => items.map(item => item.model === model ? { ...item, backends } : item));
+      try {
+        await api.reorderBackends(model, backends.map(backend => backend.id));
+      } finally {
+        // Refresh after success or failure, including concurrent backend additions/deletions.
+        await load();
+      }
+    },
+    [api, load, models]
+  );
+
   // The API object is recreated on render; only the initial load runs on mount.
   React.useEffect(() => {
     void load();
   }, []);
 
   const error = listState.error || deleteModelState.error || updateEnabledState.error ||
-    updateRecordRequestsState.error || updateRecordResponsesState.error || deleteBackendState.error;
+    updateRecordRequestsState.error || updateRecordResponsesState.error || deleteBackendState.error || reorderState.error;
   const addingBackendModel = models.find(model => model.model === addingBackendFor);
   const editingBackendModel = models.find(model => model.model === editingBackend?.model);
 
@@ -159,6 +176,8 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
               onUpdateEnabled={updateEnabled}
               onUpdateRecordRequests={updateRecordRequests}
               onUpdateRecordResponses={updateRecordResponses}
+              onReorderBackends={reorderBackends}
+              reordering={reorderState.loading}
             />
           </div>
         </div>

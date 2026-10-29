@@ -92,6 +92,15 @@ export const updateModelConfigSchema = z
 // Schema for adding a backend to an existing model
 export const addBackendToModelSchema = backendConfigSchema
 
+export const reorderBackendsSchema = z.object({
+  backendIds: z
+    .array(z.string())
+    .min(1, 'At least one backend ID is required')
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: 'Backend IDs must be unique',
+    }),
+})
+
 // Schema for updating a specific backend within a model
 export const updateBackendInModelSchema = z
   .object({
