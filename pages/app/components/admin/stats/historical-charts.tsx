@@ -3,6 +3,7 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent } from "../../ui/char
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis, Line, LineChart } from "recharts";
 import type { HistoricalStatsData } from "~/apis";
 import { Button } from "../../ui/button";
+import type { StatsRangeConfig } from "./time-ranges";
 
 // Generate a distinct color palette for any number of backends
 const generateColor = (index: number, total: number): string => {
@@ -13,7 +14,12 @@ const generateColor = (index: number, total: number): string => {
   return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 };
 
-export function HistoricalCharts({ historyData }: { historyData: HistoricalStatsData }) {
+export function HistoricalCharts({ historyData, startTime, endTime, range }: {
+  historyData: HistoricalStatsData;
+  startTime: Date;
+  endTime: Date;
+  range: StatsRangeConfig;
+}) {
   const backends = React.useMemo(() => {
     const identities = Object.keys(historyData).sort().flatMap(model =>
       Object.keys(historyData[model]).sort().map(backendId => ({ model, backendId }))
@@ -48,26 +54,54 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
     setHiddenBackends(allSelected ? new Set(backends.map(b => b.identity)) : new Set());
   };
 
-  // Prepare data for charts - merge all backends into a single timeline.
+  // Include every epoch-aligned bucket, including idle periods for each backend.
   const mergedData = React.useMemo(() => {
-    const timeMap = new Map<number, Record<string, number | string | Date>>();
+    const intervalMs = range.intervalMinutes * 60_000;
+    const firstBucket = Math.floor(startTime.getTime() / intervalMs) * intervalMs;
+    const lastBucket = Math.floor(endTime.getTime() / intervalMs) * intervalMs;
+    const timeMap = new Map<number, Record<string, number | string | null>>();
+    for (let time = firstBucket; time <= lastBucket; time += intervalMs) {
+      const entry: Record<string, number | string | null> = {
+        time,
+        timestamp: new Date(time).toISOString(),
+      };
+      backends.forEach(({ key }) => {
+        entry[`successRate_${key}`] = null;
+        entry[`streamingTtft_${key}`] = null;
+        entry[`nonStreamingTtft_${key}`] = null;
+        entry[`requests_${key}`] = 0;
+      });
+      timeMap.set(time, entry);
+    }
     backends.forEach(({ model, backendId, key }) => {
       historyData[model][backendId].forEach(point => {
         const time = new Date(point.timestamp).getTime();
-        let entry = timeMap.get(time);
-        if (!entry) timeMap.set(time, (entry = { time, timestamp: point.timestamp }));
+        const entry = timeMap.get(time);
+        if (!entry) return;
         entry[`successRate_${key}`] = point.successRate * 100;
-        entry[`streamingTtft_${key}`] = point.averageStreamingTTFT || 0;
-        entry[`nonStreamingTtft_${key}`] = point.averageNonStreamingTTFT || 0;
-        entry[`requests_${key}`] = point.totalRequests;
+        entry[`streamingTtft_${key}`] = point.averageStreamingTTFT || null;
+        entry[`nonStreamingTtft_${key}`] = point.averageNonStreamingTTFT || null;
+        entry[`requests_${key}`] = point.requestsInPeriod;
       });
     });
-    return [...timeMap].sort(([a], [b]) => a - b).map(([, entry]) => entry);
-  }, [backends, historyData]);
+    return [...timeMap.values()];
+  }, [backends, historyData, startTime, endTime, range]);
 
-  const formatTime = (timestamp: string | Date) => {
+  const formatTime = (timestamp: string | Date, includeDate = range.tickFormat === "dateTime") => {
     const date = new Date(timestamp);
-    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const time = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    if (!includeDate) return time;
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${month}-${day} ${time}`;
+  };
+
+  const formatTooltipLabel = (timestamp: string | Date) => {
+    const start = new Date(timestamp);
+    const label = formatTime(start, true);
+    if (range.intervalMinutes === 1) return label;
+    const end = new Date(start.getTime() + range.intervalMinutes * 60_000);
+    return `${label}–${formatTime(end, start.toDateString() !== end.toDateString())}`;
   };
 
   const chartConfig = React.useMemo(() => {
@@ -124,7 +158,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
       <div>
         <div className="mb-4">
           <h3 className="text-base font-medium mb-1">成功率趋势</h3>
-          <p className="text-sm text-muted-foreground">各 Backend 在每分钟内的请求成功率 (%)</p>
+          <p className="text-sm text-muted-foreground">各 Backend 在{range.granularityLabel}内的请求成功率 (%)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <LineChart
@@ -142,7 +176,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
               tickLine={false}
               axisLine={false}
               tickMargin={8}
-              tickFormatter={formatTime}
+              tickFormatter={(timestamp) => formatTime(timestamp)}
             />
             <YAxis
               domain={[0, 100]}
@@ -153,7 +187,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
             />
             <ChartTooltip
               cursor={false}
-              content={<ChartTooltipContent indicator="dot" />}
+              content={<ChartTooltipContent indicator="dot" labelFormatter={formatTooltipLabel} />}
             />
             {visibleBackends.map(({ key, identity, color }) => {
               return (
@@ -164,6 +198,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
                   stroke={color}
                   strokeWidth={2}
                   dot={false}
+                  connectNulls
                 />
               );
             })}
@@ -175,7 +210,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
       <div>
         <div className="mb-4">
           <h3 className="text-base font-medium mb-1">流式 TTFT 趋势</h3>
-          <p className="text-sm text-muted-foreground">各 Backend 在每分钟内的流式请求平均首 Token 响应时间 (毫秒)</p>
+          <p className="text-sm text-muted-foreground">各 Backend 在{range.granularityLabel}内的流式请求平均首 Token 响应时间 (毫秒)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <LineChart
@@ -193,7 +228,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
               tickLine={false}
               axisLine={false}
               tickMargin={8}
-              tickFormatter={formatTime}
+              tickFormatter={(timestamp) => formatTime(timestamp)}
             />
             <YAxis
               tickLine={false}
@@ -203,7 +238,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
             />
             <ChartTooltip
               cursor={false}
-              content={<ChartTooltipContent indicator="dot" />}
+              content={<ChartTooltipContent indicator="dot" labelFormatter={formatTooltipLabel} />}
             />
             {visibleBackends.map(({ key, identity, color }) => {
               return (
@@ -214,6 +249,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
                   stroke={color}
                   strokeWidth={2}
                   dot={false}
+                  connectNulls
                 />
               );
             })}
@@ -225,7 +261,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
       <div>
         <div className="mb-4">
           <h3 className="text-base font-medium mb-1">非流式 TTFT 趋势</h3>
-          <p className="text-sm text-muted-foreground">各 Backend 在每分钟内的非流式请求平均首 Token 响应时间 (毫秒)</p>
+          <p className="text-sm text-muted-foreground">各 Backend 在{range.granularityLabel}内的非流式请求平均首 Token 响应时间 (毫秒)</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <LineChart
@@ -243,7 +279,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
               tickLine={false}
               axisLine={false}
               tickMargin={8}
-              tickFormatter={formatTime}
+              tickFormatter={(timestamp) => formatTime(timestamp)}
             />
             <YAxis
               tickLine={false}
@@ -253,7 +289,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
             />
             <ChartTooltip
               cursor={false}
-              content={<ChartTooltipContent indicator="dot" />}
+              content={<ChartTooltipContent indicator="dot" labelFormatter={formatTooltipLabel} />}
             />
             {visibleBackends.map(({ key, identity, color }) => {
               return (
@@ -264,6 +300,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
                   stroke={color}
                   strokeWidth={2}
                   dot={false}
+                  connectNulls
                 />
               );
             })}
@@ -275,7 +312,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
       <div>
         <div className="mb-4">
           <h3 className="text-base font-medium mb-1">请求量趋势</h3>
-          <p className="text-sm text-muted-foreground">各 Backend 在每分钟内处理的请求数量</p>
+          <p className="text-sm text-muted-foreground">各 Backend 在{range.granularityLabel}内处理的请求数量</p>
         </div>
         <ChartContainer config={chartConfig} className="h-[300px] w-full">
           <AreaChart
@@ -293,7 +330,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
               tickLine={false}
               axisLine={false}
               tickMargin={8}
-              tickFormatter={formatTime}
+              tickFormatter={(timestamp) => formatTime(timestamp)}
             />
             <YAxis
               tickLine={false}
@@ -302,7 +339,7 @@ export function HistoricalCharts({ historyData }: { historyData: HistoricalStats
             />
             <ChartTooltip
               cursor={false}
-              content={<ChartTooltipContent indicator="dot" />}
+              content={<ChartTooltipContent indicator="dot" labelFormatter={formatTooltipLabel} />}
             />
             {visibleBackends.map(({ key, identity, color }) => {
               return (

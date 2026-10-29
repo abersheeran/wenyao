@@ -1,5 +1,6 @@
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
+import { z } from 'zod'
 
 import { adminAuth } from '../middleware/auth.js'
 import { apiKeyParamSchema, createApiKeySchema, updateApiKeySchema } from '../schemas/apikey.js'
@@ -185,12 +186,20 @@ admin.get('/stats', async (c) => {
 })
 
 // History routes must precede /stats/:model/:backendId.
-admin.get('/stats/history', async (c) => {
+const historyQuerySchema = z.object({
+  intervalMinutes: z.coerce.number().int().min(1).max(43200).default(1),
+})
+
+admin.get('/stats/history', zValidator('query', historyQuerySchema), async (c) => {
   const endTime = c.req.query('endTime') ? new Date(c.req.query('endTime')!) : new Date()
   const startTime = c.req.query('startTime')
     ? new Date(c.req.query('startTime')!)
     : new Date(endTime.getTime() - 24 * 60 * 60 * 1000)
-  const points = await new DbMetricsCollector(c.env.DB).getHistoricalStats({ startTime, endTime })
+  const points = await new DbMetricsCollector(c.env.DB).getHistoricalStats({
+    startTime,
+    endTime,
+    intervalMinutes: c.req.valid('query').intervalMinutes,
+  })
   const history: Record<string, Record<string, StatsDataPoint[]>> = Object.create(null)
   for (const point of points) {
     const backends = (history[point.model] ??= Object.create(null))
@@ -199,33 +208,38 @@ admin.get('/stats/history', async (c) => {
   return c.json({ history })
 })
 
-admin.get('/stats/history/:model/:backendId', async (c) => {
-  const model = c.req.param('model')
-  const backendId = c.req.param('backendId')
-  const endTime = c.req.query('endTime') ? new Date(c.req.query('endTime')!) : new Date()
-  const startTime = c.req.query('startTime')
-    ? new Date(c.req.query('startTime')!)
-    : new Date(endTime.getTime() - 24 * 60 * 60 * 1000)
-  const dataPoints = await new DbMetricsCollector(c.env.DB).getHistoricalStats({
-    backend: { model, backendId },
-    startTime,
-    endTime,
-  })
-  if (!dataPoints.length)
+admin.get(
+  '/stats/history/:model/:backendId',
+  zValidator('query', historyQuerySchema),
+  async (c) => {
+    const model = c.req.param('model')
+    const backendId = c.req.param('backendId')
+    const endTime = c.req.query('endTime') ? new Date(c.req.query('endTime')!) : new Date()
+    const startTime = c.req.query('startTime')
+      ? new Date(c.req.query('startTime')!)
+      : new Date(endTime.getTime() - 24 * 60 * 60 * 1000)
+    const dataPoints = await new DbMetricsCollector(c.env.DB).getHistoricalStats({
+      backend: { model, backendId },
+      startTime,
+      endTime,
+      intervalMinutes: c.req.valid('query').intervalMinutes,
+    })
+    if (!dataPoints.length)
+      return c.json({
+        model,
+        backendId,
+        dataPoints: [],
+        message: 'No historical data found for this backend',
+      })
     return c.json({
       model,
       backendId,
-      dataPoints: [],
-      message: 'No historical data found for this backend',
+      dataPoints,
+      startTime: dataPoints[0].timestamp,
+      endTime: dataPoints[dataPoints.length - 1].timestamp,
     })
-  return c.json({
-    model,
-    backendId,
-    dataPoints,
-    startTime: dataPoints[0].timestamp,
-    endTime: dataPoints[dataPoints.length - 1].timestamp,
-  })
-})
+  }
+)
 
 admin.get('/stats/:model/:backendId', async (c) => {
   const model = c.req.param('model')

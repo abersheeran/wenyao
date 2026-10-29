@@ -181,6 +181,7 @@ CREATE TABLE slots (
   ```
 - 平均 TTFT 按流类型分别计算：`sum / count`。原实现用总请求数做权重，混合流式与非流式时结果是错的，这里一并修正。
 - 查询时间窗口 `[start, end]` 时，包含所有与窗口有交集的分钟桶：`minute > start - 60000 AND minute <= end`。
+- 历史查询支持按 `intervalMinutes` 分钟聚合，默认 1，范围 1–43200（30 天）。桶起点按 UTC epoch 对齐，按模型和 backend 分别汇总计数；成功率为总成功数 / 总请求数，TTFT 按流类型分别使用总 sum / 总 count。查询包含与 `[start, end]` 相交的整个区间桶，即从 start 所在桶起点到 end 所在桶末尾，首尾桶中窗口外的分钟也纳入。
 - `lowest-ttft` 和 `min-error-rate` 一次查询全部模型的统计，按 `model, backend_id` 分组，结果在 isolate 内缓存 15 秒；选择时只使用本模型的 backend 统计，其他模型的同名 backend 不影响选择。
 - Prometheus 的请求计数、请求时长计数、TTFT 和成功率指标增加 `model` 标签，指标名不变。导出范围是配置中已启用的 `(model, backendId)` 与最近 60 秒有数据的 `(model, backendId)` 的并集；时间窗口遵循分钟桶规则。活跃请求指标仍只按 backend ID 区分，与并发限制 DO 一致。
 - `0004_model_backend_stats.sql` 迁移旧指标时，按当前全部模型配置（包括禁用 backend）查找每个 backend ID 的归属：恰好属于一个模型则保留并归入该模型；属于多个模型的数据已混合、无法拆分，或不属于任何模型时，丢弃。
@@ -281,6 +282,8 @@ CREATE TABLE slots (
 
 `/stats` 页的筛选按钮、图例和 tooltip 均以 `model/backendId` 标识 backend，按模型名、再按 backend ID 排序。每个模型的同名 backend 可以独立筛选。
 
+时间范围与历史粒度对应为：1h 每分钟、6h 每 5 分钟、24h 每 15 分钟、7d 每小时。图表补齐窗口内的等间距桶；空桶请求量为 0，成功率和 TTFT 留空并连接相邻有数据的点，某流类型无样本时 TTFT 也留空。X 轴使用本地时间，7d 刻度带日期；tooltip 显示带日期的桶时间，粗于分钟时显示桶区间。加载期间按已加载数据对应的窗口和粒度显示。
+
 模型和 backend 多了以后，要能快速找到某个模型，并在它和其他模型之间切换。`/` 页采用左右两栏布局：左栏是模型列表，右栏是选中模型的详情。
 
 - **左栏：模型列表**
@@ -345,11 +348,12 @@ Jev 是 TypeSafe 的决策模型，官方接口是 TypeSafe 的 System One API�
 - 代理：`/v1/chat/completions`、Bedrock 的 `/v1/model/:modelId/invoke` 和 `/v1/model/:modelId/invoke-with-response-stream`。
 - 管理：models / backends / apikeys / affinity / recorded-requests 的 CRUD；`/admin/active-requests`；`DELETE /admin/stats` 仍清空全部指标。
 
-指标接口的不兼容变更：
+指标接口变更：
 
 - `GET /admin/stats` 每项新增 `model`，保留 `backendId`；历史数据点也新增 `model`。
 - 单 backend 路由替换为 `GET /admin/stats/:model/:backendId`、`GET /admin/stats/history/:model/:backendId`、`DELETE /admin/stats/:model/:backendId`，删除原来仅有 `:backendId` 的版本。单项删除只清除对应模型和 backend 的统计。路径中的模型名和 backend ID 分别使用 `encodeURIComponent`，与 `/admin/models/:model/backends/:backendId` 一致，支持名称中的 `/`、`.` 等字符。
 - `GET /admin/stats/history` 返回 `{ history: { [model]: { [backendId]: StatsDataPoint[] } } }`。单 backend 历史响应在原有 `backendId`、`dataPoints` 等字段外新增 `model`，无数据时也返回这两个标识和空数组。
+- `GET /admin/stats/history` 和 `GET /admin/stats/history/:model/:backendId` 新增可选查询参数 `intervalMinutes`，为 1–43200 的正整数。不传时仍按分钟返回，行为不变；非法值返回 400 JSON，响应含 `error` 字段。
 - `/admin/metrics` 中 `llm_proxy_requests_total`、`llm_proxy_request_duration_seconds_count`、`llm_proxy_ttft_seconds_*`、`llm_proxy_success_rate` 新增 `model` 标签；指标名不变。`llm_proxy_active_requests` 的标签和 `/admin/active-requests` 响应不变。
 
 删除：

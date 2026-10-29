@@ -6,41 +6,35 @@ import { Switch } from "../../ui/switch";
 import { Spinner } from "../../ui/spinner";
 import { useAdminApi, type HistoricalStatsData } from "~/apis";
 import { HistoricalCharts } from "./historical-charts";
+import { TIME_RANGES, type StatsRangeConfig, type StatsTimeRange } from "./time-ranges";
 
 export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
-  const [historyData, setHistoryData] = React.useState<HistoricalStatsData>({});
-  const [timeRange, setTimeRange] = React.useState<string>("1h"); // 1h, 6h, 24h, 7d
+  const [loadedHistory, setLoadedHistory] = React.useState<{
+    historyData: HistoricalStatsData;
+    startTime: Date;
+    endTime: Date;
+    range: StatsRangeConfig;
+  } | null>(null);
+  const [timeRange, setTimeRange] = React.useState<StatsTimeRange>("1h");
+  const latestLoad = React.useRef(0);
   const [autoRefresh, setAutoRefresh] = React.useState<boolean>(false);
 
   const [historyState, loadHistory] = useAsyncFn(async () => {
-    const now = new Date();
-    let startTime: Date;
-
-    switch (timeRange) {
-      case "1h":
-        startTime = new Date(now.getTime() - 60 * 60 * 1000);
-        break;
-      case "6h":
-        startTime = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-        break;
-      case "24h":
-        startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        break;
-      case "7d":
-        startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        break;
-      default:
-        startTime = new Date(now.getTime() - 60 * 60 * 1000);
-    }
+    const loadId = ++latestLoad.current;
+    const range = TIME_RANGES[timeRange];
+    const endTime = new Date();
+    const startTime = new Date(endTime.getTime() - range.durationMs);
 
     try {
-      const data = await api.getAllHistoricalStats(startTime, now);
-      setHistoryData(data);
+      const data = await api.getAllHistoricalStats(startTime, endTime, range.intervalMinutes);
+      if (loadId === latestLoad.current) {
+        setLoadedHistory({ historyData: data, startTime, endTime, range });
+      }
       return data;
     } catch (error: any) {
       // Handle metrics disabled (503) gracefully
       if (error.message?.includes('503') || error.message?.includes('disabled')) {
-        setHistoryData({});
+        if (loadId === latestLoad.current) setLoadedHistory(null);
         throw new Error('指标收集已禁用。请在服务器配置中启用 ENABLE_METRICS=true');
       }
       throw error;
@@ -66,19 +60,18 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
         <div>
           <h2 className="text-xl font-semibold">历史趋势</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            数据按模型与 Backend 每分钟聚合，以 model/backendId 标识
+            数据按模型与 Backend {loadedHistory?.range.granularityLabel ?? TIME_RANGES[timeRange].granularityLabel}聚合，以 model/backendId 标识
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Select value={timeRange} onValueChange={(v) => setTimeRange(v)}>
+          <Select value={timeRange} onValueChange={(v) => setTimeRange(v as StatsTimeRange)}>
             <SelectTrigger className="text-sm w-32">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="1h">过去 1 小时</SelectItem>
-              <SelectItem value="6h">过去 6 小时</SelectItem>
-              <SelectItem value="24h">过去 24 小时</SelectItem>
-              <SelectItem value="7d">过去 7 天</SelectItem>
+              {Object.entries(TIME_RANGES).map(([value, range]) => (
+                <SelectItem key={value} value={value}>{range.label}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
           <Button variant="outline" onClick={loadHistory} disabled={historyState.loading}>
@@ -99,7 +92,7 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
       {historyState.error && (
         <p className="text-sm text-red-600 mb-2">{historyState.error.message}</p>
       )}
-      {Object.keys(historyData).length === 0 ? (
+      {!loadedHistory || Object.keys(loadedHistory.historyData).length === 0 ? (
         historyState.loading ? (
           <p className="text-sm text-gray-500">加载中...</p>
         ) : (
@@ -107,7 +100,7 @@ export function StatsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
         )
       ) : (
         <div className="space-y-8">
-          <HistoricalCharts historyData={historyData} />
+          <HistoricalCharts {...loadedHistory} />
         </div>
       )}
     </div>

@@ -325,10 +325,11 @@ export function useAdminApi() {
     },
 
     // Historical stats operations (near-realtime aggregated from D1)
-    async getHistoricalStats(model: string, backendId: string, startTime?: Date, endTime?: Date): Promise<HistoricalStatsResponse> {
+    async getHistoricalStats(model: string, backendId: string, startTime?: Date, endTime?: Date, intervalMinutes?: number): Promise<HistoricalStatsResponse> {
       const params = new URLSearchParams();
       if (startTime) params.append('startTime', startTime.toISOString());
       if (endTime) params.append('endTime', endTime.toISOString());
+      if (intervalMinutes !== undefined) params.append('intervalMinutes', String(intervalMinutes));
 
       const queryString = params.toString();
       const url = `${base}/stats/history/${encodeURIComponent(model)}/${encodeURIComponent(backendId)}${queryString ? `?${queryString}` : ''}`;
@@ -339,10 +340,11 @@ export function useAdminApi() {
       if (!res.ok) throw new Error("Failed to load historical stats");
       return await res.json();
     },
-    async getAllHistoricalStats(startTime?: Date, endTime?: Date): Promise<HistoricalStatsData> {
+    async getAllHistoricalStats(startTime?: Date, endTime?: Date, intervalMinutes?: number): Promise<HistoricalStatsData> {
       const params = new URLSearchParams();
       if (startTime) params.append('startTime', startTime.toISOString());
       if (endTime) params.append('endTime', endTime.toISOString());
+      if (intervalMinutes !== undefined) params.append('intervalMinutes', String(intervalMinutes));
 
       const queryString = params.toString();
       const url = `${base}/stats/history${queryString ? `?${queryString}` : ''}`;

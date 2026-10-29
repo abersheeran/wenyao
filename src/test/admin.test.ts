@@ -19,6 +19,7 @@ import {
   seedConnections,
   upstream,
 } from './helpers.js'
+import { DbMetricsCollector } from '../services/metrics/db-collector.js'
 
 import type { ApiKey } from '../types/apikey.js'
 import type {
@@ -379,6 +380,189 @@ describe('Request recording in D1 and R2', () => {
 })
 
 describe('Statistics APIs', () => {
+  it('aggregates epoch-aligned history buckets with weighted rates and TTFT per model/backend', async () => {
+    const minute = Date.UTC(2026, 9, 21, 12)
+    await insertStats('b1', {
+      minute,
+      total: 2,
+      success: 1,
+      failure: 1,
+      streamingSum: 100,
+      streamingCount: 1,
+      nonStreamingSum: 200,
+      nonStreamingCount: 1,
+    })
+    await insertStats('b1', {
+      minute: minute + 60_000,
+      total: 10,
+      success: 8,
+      failure: 2,
+      streamingSum: 2700,
+      streamingCount: 3,
+      nonStreamingSum: 1800,
+      nonStreamingCount: 3,
+    })
+    await insertStats('b1', {
+      minute: minute + 5 * 60_000,
+      total: 4,
+      success: 3,
+      failure: 1,
+      streamingSum: 1600,
+      streamingCount: 2,
+      nonStreamingSum: 900,
+      nonStreamingCount: 1,
+    })
+    await insertStats('b2', { minute, total: 30, success: 30 })
+    await insertStats('b1', { minute, model: 'other-model', total: 9, success: 9 })
+    const startTime = new Date(minute)
+    const endTime = new Date(minute + 9 * 60_000)
+    const query = new URLSearchParams({
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString(),
+      intervalMinutes: '5',
+    })
+    const response = await admin(`/stats/history?${query}`)
+    expect(response.status).toBe(200)
+    const { history } = (await response.json()) as {
+      history: Record<string, Record<string, StatsDataPoint[]>>
+    }
+    expect(history[MODEL].b1).toEqual([
+      {
+        model: MODEL,
+        backendId: 'b1',
+        timestamp: new Date(minute + 5 * 60_000).toISOString(),
+        totalRequests: 4,
+        successfulRequests: 3,
+        failedRequests: 1,
+        successRate: 3 / 4,
+        averageStreamingTTFT: 800,
+        averageNonStreamingTTFT: 900,
+        requestsInPeriod: 4,
+      },
+      {
+        model: MODEL,
+        backendId: 'b1',
+        timestamp: startTime.toISOString(),
+        totalRequests: 12,
+        successfulRequests: 9,
+        failedRequests: 3,
+        successRate: 9 / 12,
+        averageStreamingTTFT: 700,
+        averageNonStreamingTTFT: 500,
+        requestsInPeriod: 12,
+      },
+    ])
+    expect(history[MODEL].b2).toMatchObject([{ totalRequests: 30 }])
+    expect(history['other-model'].b1).toMatchObject([{ totalRequests: 9 }])
+    const single = await admin(`/stats/history/${encodeURIComponent(MODEL)}/b1?${query}`)
+    expect(single.status).toBe(200)
+    expect(await single.json()).toMatchObject({
+      model: MODEL,
+      backendId: 'b1',
+      dataPoints: history[MODEL].b1,
+    })
+
+    // Limit applies after aggregation and preserves bucket DESC, model, backend ordering.
+    const limited = await new DbMetricsCollector(env.DB).getHistoricalStats({
+      startTime,
+      endTime,
+      intervalMinutes: 5,
+      limit: 3,
+    })
+    expect(limited.map(({ model, backendId, timestamp }) => [model, backendId, timestamp])).toEqual(
+      [
+        [MODEL, 'b1', new Date(minute + 5 * 60_000)],
+        [MODEL, 'b1', startTime],
+        [MODEL, 'b2', startTime],
+      ]
+    )
+  })
+
+  it('includes whole intersecting history buckets at both window boundaries', async () => {
+    const minute = Date.UTC(2026, 9, 21, 12)
+    for (const [offset, total] of [
+      [-1, 100],
+      [0, 2],
+      [4, 3],
+      [5, 5],
+      [9, 7],
+      [10, 100],
+    ]) {
+      await insertStats('b1', { minute: minute + offset * 60_000, total, success: total })
+    }
+    const query = new URLSearchParams({
+      startTime: new Date(minute + 2.5 * 60_000).toISOString(),
+      endTime: new Date(minute + 6.5 * 60_000).toISOString(),
+      intervalMinutes: '5',
+    })
+    const response = await admin(`/stats/history?${query}`)
+    expect(response.status).toBe(200)
+    const { history } = (await response.json()) as {
+      history: Record<string, Record<string, StatsDataPoint[]>>
+    }
+    expect(history[MODEL].b1).toMatchObject([
+      { timestamp: new Date(minute + 5 * 60_000).toISOString(), requestsInPeriod: 12 },
+      { timestamp: new Date(minute).toISOString(), requestsInPeriod: 5 },
+    ])
+    expect(history[MODEL].b1).toHaveLength(2)
+  })
+
+  it('keeps explicit one-minute history identical to the default on both routes', async () => {
+    const minute = Date.UTC(2026, 9, 21, 12)
+    for (const offset of [-1, 0, 1, 2, 3]) {
+      await insertStats('b1', {
+        minute: minute + offset * 60_000,
+        total: offset + 2,
+        success: offset + 2,
+      })
+    }
+    const query = new URLSearchParams({
+      startTime: new Date(minute + 30_000).toISOString(),
+      endTime: new Date(minute + 2 * 60_000).toISOString(),
+    })
+    for (const path of ['/stats/history', `/stats/history/${encodeURIComponent(MODEL)}/b1`]) {
+      const defaultResponse = await admin(`${path}?${query}`)
+      const explicitResponse = await admin(`${path}?${query}&intervalMinutes=1`)
+      expect(defaultResponse.status).toBe(200)
+      expect(explicitResponse.status).toBe(200)
+      const defaultBody = await defaultResponse.json()
+      expect(await explicitResponse.json()).toEqual(defaultBody)
+      const { dataPoints, history } = defaultBody as {
+        dataPoints?: StatsDataPoint[]
+        history?: Record<string, Record<string, StatsDataPoint[]>>
+      }
+      expect((dataPoints ?? history![MODEL].b1).map((point) => point.timestamp)).toEqual(
+        [2, 1, 0].map((offset) => new Date(minute + offset * 60_000).toISOString())
+      )
+    }
+  })
+
+  it('accepts a history interval equal to the 30-day retention period', async () => {
+    const minute = Date.UTC(2026, 9, 21, 12)
+    await insertStats('b1', { minute })
+    const query = new URLSearchParams({
+      startTime: new Date(minute).toISOString(),
+      endTime: new Date(minute).toISOString(),
+      intervalMinutes: '43200',
+    })
+    const response = await admin(`/stats/history/${encodeURIComponent(MODEL)}/b1?${query}`)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      dataPoints: [
+        { timestamp: new Date(Math.floor(minute / 2_592_000_000) * 2_592_000_000).toISOString() },
+      ],
+    })
+  })
+
+  it.each(['0', '-1', '1.5', 'abc', '43201'])(
+    'rejects invalid history intervalMinutes=%s with a JSON error on both routes',
+    async (intervalMinutes) => {
+      for (const path of ['/stats/history', `/stats/history/${encodeURIComponent(MODEL)}/b1`]) {
+        await expectError(await admin(`${path}?intervalMinutes=${intervalMinutes}`), 400)
+      }
+    }
+  )
+
   it('separates proxy metrics for shared backend IDs across models and deletes only the requested pair', async () => {
     const models = ['vendor/model.v1', 'other/model.v2%2F']
     const backendId = 'azure'

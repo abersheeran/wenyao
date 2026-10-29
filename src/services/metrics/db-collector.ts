@@ -165,27 +165,31 @@ export class DbMetricsCollector {
   }
 
   async getHistoricalStats(params: HistoryQueryParams): Promise<StatsDataPoint[]> {
+    const intervalMs = (params.intervalMinutes ?? 1) * 60_000
     const values: (number | string)[] = [
-      params.startTime.getTime() - 60_000,
-      params.endTime.getTime(),
+      intervalMs,
+      Math.floor(params.startTime.getTime() / intervalMs) * intervalMs,
+      Math.floor(params.endTime.getTime() / intervalMs) * intervalMs + intervalMs,
     ]
     if (params.backend) values.push(params.backend.model, params.backend.backendId)
     if (params.limit !== undefined) values.push(params.limit)
     const { results } = await this.db
       .prepare(
-        `SELECT * FROM backend_stats_minute WHERE minute > ? AND minute <= ?
+        `SELECT ${TOTAL_COLUMNS}, minute - (minute % ?) AS bucket
+         FROM backend_stats_minute WHERE minute >= ? AND minute < ?
          ${params.backend ? 'AND model = ? AND backend_id = ?' : ''}
-         ORDER BY minute DESC, model, backend_id
+         GROUP BY model, backend_id, bucket
+         ORDER BY bucket DESC, model, backend_id
          ${params.limit === undefined ? '' : 'LIMIT ?'}`
       )
       .bind(...values)
-      .all<MetricsTotals & { minute: number }>()
+      .all<MetricsTotals & { bucket: number }>()
     return results.map((row) => {
       const stats = toStats(row)
       return {
         model: row.model,
         backendId: row.backend_id,
-        timestamp: new Date(row.minute),
+        timestamp: new Date(row.bucket),
         totalRequests: stats.totalRequests,
         successfulRequests: stats.successfulRequests,
         failedRequests: stats.failedRequests,

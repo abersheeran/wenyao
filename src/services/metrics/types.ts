@@ -19,6 +19,7 @@ export interface HistoryQueryParams {
   startTime: Date
   endTime: Date
   limit?: number
+  intervalMinutes?: number
 }
 
 export interface BackendIdentity {

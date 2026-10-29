@@ -132,6 +132,7 @@ ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
 - 已部署实例应用 `0002_connections.sql` 时会自动合并已有内嵌连接并转换 backend；缺少有效内嵌配置的 backend 需要在管理面板中补选连接。
 - `ADMIN_APIKEYS` 必须配置。代理 key 缺失或无效返回 401，无权访问模型返回 403。代理 key 的 `lastUsedAt` 在同一 isolate 内最多每 60 秒写入一次。
 - 指标始终开启，按「模型 + backend ID」分别进行分钟汇总，保存 30 天；backend ID 只在模型内唯一。stats 页以 `model/backendId` 显示并独立筛选。查询包含与时间窗口相交的分钟桶，因此不足一分钟的窗口仍可能包含整分钟的计数；TTFT 按流式、非流式分别使用 `sum / count`。负载均衡只使用本模型的统计，缓存 15 秒。
+- 历史查询支持 `intervalMinutes`（1–43200，默认 1），按 UTC 对齐并纳入与窗口相交的整桶；stats 页的 1h / 6h / 24h / 7d 分别使用 1 / 5 / 15 / 60 分钟粒度。
 - `0004_model_backend_stats.sql` 将旧指标归入当前配置中唯一对应的模型（包括禁用 backend）；多模型重名或孤立 ID 的旧数据丢弃。
 - 指标数据项新增 `model`。单 backend 指标查询、历史查询和删除路径分别为 `/admin/stats/:model/:backendId`、`/admin/stats/history/:model/:backendId`、`DELETE /admin/stats/:model/:backendId`，两个路径参数分别用 `encodeURIComponent`。全部历史返回 `{ history: { [model]: { [backendId]: StatsDataPoint[] } } }`；`DELETE /admin/stats` 仍清空全部。Prometheus 的请求、时长计数、TTFT 和成功率指标新增 `model` 标签，活跃请求指标不变。
 - 只有配置了 `maxConcurrentRequests > 0` 的后端才使用并发限制，每个后端一个 DO。每次尝试通过 `acquire`、`release` 两次 RPC 抢占和释放名额；DO 使用内置 SQLite 持久化，休眠或重启不会丢失计数，超过 30 分钟的名额在 `acquire` / `count` 时清理。DO 调用异常时记录日志并放行。长于 30 分钟的请求不再占用有效并发名额。
