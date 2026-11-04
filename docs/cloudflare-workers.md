@@ -160,7 +160,11 @@ CREATE TABLE slots (
    - 流式响应：当前 OpenAI 和 Bedrock 都不改写 chunk，所以删除 `processChunk` / `useBinaryStream` / `processBody` 这些未被使用的钩子，也不再先 decode 成字符串再 encode 回去。
    - 非流式 2xx 响应：读完整个 body 后用 `JSON.parse` 校验。校验失败按失败处理（记失败指标，返回 500 `internal_error`，然后 fallback），与原实现一致；校验通过就原样返回原始字节，不重新序列化。
 4. **TTFT 超时。** 超时后取消上游响应体，然后 fallback 到下一个后端。
-5. **转发头过滤。** 转发给 OpenAI 兼容后端时，不带 `host`、`content-length`、`authorization`、`x-authorization`、`cf-*`、`x-forwarded-*`、`x-real-ip`、`cdn-loop` 等由客户端或 Cloudflare 添加的头。
+5. **转发头过滤。** OpenAI 兼容后端与 Jev 共用以下规则，头部名称不区分大小写：
+   - 不透传客户端的 `host`、`content-length`、`content-encoding`、`authorization`、`x-authorization`、`cdn-loop` 和逐跳头；上游 `Authorization` 使用 connection 的 API key 重新设置。
+   - 不透传客户端 IP 与地区信息头：`forwarded`、`true-client-ip`、`x-real-ip`、`cf-*`、`x-forwarded-*`、`x-vercel-forwarded-for`、`x-vercel-ip-*`，以及 CloudFront 的 `cloudfront-viewer-address`、`cloudfront-viewer-asn`、`cloudfront-viewer-country`、`cloudfront-viewer-country-name`、`cloudfront-viewer-country-region`、`cloudfront-viewer-country-region-name`、`cloudfront-viewer-city`、`cloudfront-viewer-latitude`、`cloudfront-viewer-longitude`、`cloudfront-viewer-metro-code`、`cloudfront-viewer-postal-code`、`cloudfront-viewer-time-zone`。
+   - 不透传语言偏好与页面来源头：`accept-language`、`origin`、`referer`。
+   - 其他业务头继续透传；`Connection` 指定的逐跳头也会移除。这些规则约束文鳐主动转发的入站头，Cloudflare 在网络层生成的请求头与上下文由平台决定。
 
 ### 5.3 指标
 

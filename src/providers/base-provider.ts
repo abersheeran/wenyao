@@ -22,7 +22,25 @@ export function prepareJsonHeaders(
     'content-encoding',
     'authorization',
     'x-authorization',
+    'forwarded',
+    'true-client-ip',
     'x-real-ip',
+    'x-vercel-forwarded-for',
+    'cloudfront-viewer-address',
+    'cloudfront-viewer-asn',
+    'cloudfront-viewer-country',
+    'cloudfront-viewer-country-name',
+    'cloudfront-viewer-country-region',
+    'cloudfront-viewer-country-region-name',
+    'cloudfront-viewer-city',
+    'cloudfront-viewer-latitude',
+    'cloudfront-viewer-longitude',
+    'cloudfront-viewer-metro-code',
+    'cloudfront-viewer-postal-code',
+    'cloudfront-viewer-time-zone',
+    'accept-language',
+    'origin',
+    'referer',
     'cdn-loop',
     'connection',
     'keep-alive',
@@ -39,7 +57,12 @@ export function prepareJsonHeaders(
   }
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase()
-    if (!blocked.has(lower) && !lower.startsWith('cf-') && !lower.startsWith('x-forwarded-'))
+    if (
+      !blocked.has(lower) &&
+      !lower.startsWith('cf-') &&
+      !lower.startsWith('x-forwarded-') &&
+      !lower.startsWith('x-vercel-ip-')
+    )
       result[lower] = value
   }
   result.authorization = `Bearer ${apiKey}`

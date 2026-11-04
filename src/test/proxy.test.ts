@@ -119,8 +119,42 @@ describe('Proxy authentication and selection', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it('replaces authentication and removes client and Cloudflare forwarding headers', async () => {
+  it('replaces authentication and removes client forwarding, location, and origin headers', async () => {
     await seed()
+    const clientMetadataHeaders = {
+      Forwarded: 'for=192.0.2.4;proto=https;host=client.example',
+      'True-Client-IP': '192.0.2.5',
+      'CF-IPCountry': 'CN',
+      'CF-IPCity': 'Shanghai',
+      'CF-Region': 'Shanghai',
+      'CF-Timezone': 'Asia/Shanghai',
+      'CF-IPLatitude': '31.23',
+      'CF-IPLongitude': '121.47',
+      'X-Vercel-Forwarded-For': '192.0.2.6',
+      'X-Vercel-IP-Country': 'CN',
+      'X-Vercel-IP-Country-Region': 'SH',
+      'X-Vercel-IP-City': 'Shanghai',
+      'X-Vercel-IP-Continent': 'AS',
+      'X-Vercel-IP-Timezone': 'Asia/Shanghai',
+      'X-Vercel-IP-Latitude': '31.23',
+      'X-Vercel-IP-Longitude': '121.47',
+      'X-Vercel-IP-Postal-Code': '200000',
+      'CloudFront-Viewer-Address': '192.0.2.7:443',
+      'CloudFront-Viewer-ASN': '64500',
+      'CloudFront-Viewer-Country': 'CN',
+      'CloudFront-Viewer-Country-Name': 'China',
+      'CloudFront-Viewer-Country-Region': 'SH',
+      'CloudFront-Viewer-Country-Region-Name': 'Shanghai',
+      'CloudFront-Viewer-City': 'Shanghai',
+      'CloudFront-Viewer-Latitude': '31.23',
+      'CloudFront-Viewer-Longitude': '121.47',
+      'CloudFront-Viewer-Metro-Code': '501',
+      'CloudFront-Viewer-Postal-Code': '200000',
+      'CloudFront-Viewer-Time-Zone': 'Asia/Shanghai',
+      'Accept-Language': 'zh-CN,zh;q=0.9',
+      Origin: 'https://client.example',
+      Referer: 'https://client.example/chat',
+    }
     let forwarded = new Headers()
     upstream((req) => {
       forwarded = req.headers
@@ -138,6 +172,7 @@ describe('Proxy authentication and selection', () => {
         'X-Forwarded-Host': 'private.example',
         'X-Real-IP': '192.0.2.3',
         'CDN-Loop': 'cloudflare',
+        ...clientMetadataHeaders,
         'X-Custom': 'keep-me',
       }
     )
@@ -153,6 +188,7 @@ describe('Proxy authentication and selection', () => {
       'x-forwarded-host',
       'x-real-ip',
       'cdn-loop',
+      ...Object.keys(clientMetadataHeaders),
     ]) {
       expect(forwarded.has(header), header).toBe(false)
     }

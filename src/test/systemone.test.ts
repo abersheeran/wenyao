@@ -168,7 +168,19 @@ describe('System One API proxy', () => {
       expect(req.method).toBe('POST')
       expect(req.headers.get('authorization')).toBe('Bearer jev-upstream-secret')
       expect(req.headers.get('content-type')).toBe('application/json')
-      for (const name of ['x-authorization', 'cf-ray', 'x-forwarded-for', 'x-private'])
+      for (const name of [
+        'x-authorization',
+        'cf-ray',
+        'x-forwarded-for',
+        'x-private',
+        'forwarded',
+        'true-client-ip',
+        'x-vercel-ip-country',
+        'cloudfront-viewer-country',
+        'accept-language',
+        'origin',
+        'referer',
+      ])
         expect(req.headers.has(name), name).toBe(false)
       expect(req.headers.get('x-custom')).toBe('keep-me')
       expect(req.headers.get('typesafe-danger-zone-images')).toBe('true')
@@ -184,6 +196,13 @@ describe('System One API proxy', () => {
       'X-Authorization': `Bearer ${PROXY_KEY}`,
       'CF-Ray': 'client-ray',
       'X-Forwarded-For': '192.0.2.1',
+      Forwarded: 'for=192.0.2.2',
+      'True-Client-IP': '192.0.2.3',
+      'X-Vercel-IP-Country': 'CN',
+      'CloudFront-Viewer-Country': 'CN',
+      'Accept-Language': 'zh-CN',
+      Origin: 'https://client.example',
+      Referer: 'https://client.example/chat',
       Connection: 'x-private',
       'X-Private': 'remove-me',
       'X-Custom': 'keep-me',
