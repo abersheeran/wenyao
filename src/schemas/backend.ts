@@ -59,6 +59,15 @@ export const backendConfigSchema = z.object({
     .optional(),
 })
 
+// Keeps min-error-rate weights finite (epsilon > 0, at least one sample) and the
+// statistics window within the 30-day metrics retention.
+export const minErrorRateOptionsSchema = z.object({
+  minRequests: z.number().int().min(1).optional(),
+  circuitBreakerThreshold: z.number().min(0).max(1).optional(),
+  epsilon: z.number().positive().optional(),
+  timeWindowMinutes: z.number().int().min(1).max(43200).optional(),
+})
+
 // Schema for creating a new model configuration
 export const createModelConfigSchema = z.object({
   model: z.string().min(1, 'Model name is required'),
@@ -66,6 +75,7 @@ export const createModelConfigSchema = z.object({
   provider: providerTypeSchema,
   backends: z.array(backendConfigSchema).default([]), // Allow empty backends array
   loadBalancingStrategy: loadBalancingStrategySchema.default('weighted'),
+  minErrorRateOptions: minErrorRateOptionsSchema.optional(),
   enableAffinity: z.boolean().default(false).optional(),
 }) // Cross-provider validation is a business error handled by ConfigManager.
 
@@ -85,6 +95,8 @@ export const updateModelConfigSchema = z
       .min(1, 'At least one backend is required')
       .optional(),
     loadBalancingStrategy: loadBalancingStrategySchema.optional(),
+    // Replaces the stored options as a whole, like other top-level model fields.
+    minErrorRateOptions: minErrorRateOptionsSchema.optional(),
     enableAffinity: z.boolean().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {

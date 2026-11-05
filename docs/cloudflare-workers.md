@@ -410,6 +410,9 @@ production、test、develop 等不同环境的模型都在同一个列表里，�
   - 请求体为 `{ backendIds }`，按新顺序列出该模型当前的全部 backend ID，每个恰好一次。返回 `{ model }`，与其他 backend 写入接口相同。
   - 列表为空或有重复 ID 时返回 400；模型不存在时返回 404；与模型当前的 backend 不一致时（缺少、多出或未知 ID，例如期间有人增删了 backend）返回 409。
   - 只改变顺序，不修改 backend 的其他字段，也不重新校验 connection，因此未设置 connection 的遗留 backend 不会阻塞排序。与其他模型写入一样使用比较并交换，写入后失效当前 isolate 的配置缓存。
+- 创建和更新模型时保存 `min-error-rate` 策略的 `minErrorRateOptions`（原来会被静默丢弃，策略始终使用默认值）：
+  - 字段均可选，缺省时使用默认值：`minRequests`（默认 20）为不小于 1 的整数；`circuitBreakerThreshold`（默认 0.9）在 0–1 之间；`epsilon`（默认 0.001）必须大于 0，否则错误率为 0 的 backend 权重会变成无穷大；`timeWindowMinutes`（默认 15）为 1–43200 的整数，不超过指标保留期。
+  - 取值非法时返回 400。更新时整体替换已保存的参数；不传这个字段时保留原值。
 - 模型新增 `group` 字段（见 5.11）：创建和更新模型时可选，模型响应总是包含该字段，未分组时为空字符串。
 - 新增 `/admin/connections` 的 CRUD（见 5.8）。**不兼容变更**：创建和更新 backend（包括通过模型的 `backends` 数组写入）时，用 `connectionId` 代替 `openaiConfig` / `bedrockConfig`。缺少 `connectionId` 的创建请求返回 400。模型和 backend 的响应不再包含凭据。
 

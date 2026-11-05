@@ -128,6 +128,7 @@ ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
 ## 限制与行为
 
 - 模型可设置可选的分组 `group`（如 `production`、`test`、`develop`），用于在管理面板中按环境筛选和分节显示模型，以及在 API key 对话框中分组选择模型。分组名是自由文本，最长 64 个字符，首尾空白会被去掉，空字符串表示未分组；模型响应总是包含 `group`。分组只用于管理面板，不影响代理路由、鉴权和指标；模型名仍全局唯一。
+- `min-error-rate` 策略参数 `minErrorRateOptions` 在创建和更新模型时保存，字段均可选：`minRequests` 为不小于 1 的整数，`circuitBreakerThreshold` 在 0–1 之间，`epsilon` 大于 0，`timeWindowMinutes` 为 1–43200 的整数；非法值返回 400，更新时整体替换。
 - `PUT /admin/models/:model/backend-order` 接受 `{ backendIds: string[] }` 调整回退顺序；须恰好包含当前全部 backend ID，空列表或重复返回 400，模型不存在返回 404，缺少、多出或未知 ID 返回 409；仅改变顺序，保留 backend 其他字段。
 - 模型、connection 和代理 API key 在每个 isolate 内缓存 10 秒；connection 修改（包括轮换凭据）对所有引用它的 backend 生效，其他 isolate 最多 10 秒后看到变更。管理 API 直接读写 D1，写入后立即使当前 isolate 的配置缓存失效。
 - backend 写入使用 `connectionId`，不接受内嵌 `openaiConfig` / `bedrockConfig` / `jevConfig`。模型和后端的管理响应不包含凭据；凭据只通过 `/admin/connections` 返回。connection 可设置并修改显示名称，provider（`openai` / `bedrock` / `jev`）必须与模型一致，被引用时删除返回 409，并列出 `model/backendId`。

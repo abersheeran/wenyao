@@ -63,7 +63,7 @@ export function AddModelDialog({ open, onOpenChange, onAdded, groupNames, initia
           </div>
           <div>
             <label htmlFor={groupId} className="block text-sm mb-1">Group</label>
-            <Input id={groupId} list={`${groupId}-options`} value={group} onChange={e => setGroup(e.target.value)} placeholder="e.g., production, test, develop" aria-describedby={`${groupId}-help`} />
+            <Input id={groupId} list={`${groupId}-options`} value={group} onChange={e => setGroup(e.target.value)} maxLength={64} placeholder="e.g., production, test, develop" aria-describedby={`${groupId}-help`} />
             <datalist id={`${groupId}-options`}>
               {groupNames.map(name => <option key={name} value={name} />)}
             </datalist>
@@ -137,6 +137,7 @@ export function AddModelDialog({ open, onOpenChange, onAdded, groupNames, initia
                     type="number"
                     min={1}
                     step={1}
+                    required
                     value={minErrorRateOpts.minRequests}
                     onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, minRequests: Number(e.target.value) })}
                   />
@@ -149,6 +150,7 @@ export function AddModelDialog({ open, onOpenChange, onAdded, groupNames, initia
                     min={0}
                     max={1}
                     step={0.01}
+                    required
                     value={minErrorRateOpts.circuitBreakerThreshold}
                     onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, circuitBreakerThreshold: Number(e.target.value) })}
                   />
@@ -158,8 +160,9 @@ export function AddModelDialog({ open, onOpenChange, onAdded, groupNames, initia
                   <label className="block text-sm mb-1">Epsilon 值</label>
                   <Input
                     type="number"
-                    min={0}
+                    min={0.0001}
                     step={0.0001}
+                    required
                     value={minErrorRateOpts.epsilon}
                     onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, epsilon: Number(e.target.value) })}
                   />
@@ -170,7 +173,9 @@ export function AddModelDialog({ open, onOpenChange, onAdded, groupNames, initia
                   <Input
                     type="number"
                     min={1}
+                    max={43200}
                     step={1}
+                    required
                     value={minErrorRateOpts.timeWindowMinutes}
                     onChange={(e) => setMinErrorRateOpts({ ...minErrorRateOpts, timeWindowMinutes: Number(e.target.value) })}
                   />
