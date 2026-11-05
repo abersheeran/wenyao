@@ -13,6 +13,7 @@ import { EditBackendDialog } from "./edit-backend-dialog";
 import { DeleteConfirmationDialog } from "./delete-confirmation-dialog";
 import { ModelList } from "./model-list";
 import { ModelDetails, type ListedModel } from "./model-details";
+import { getModelSections } from "../model-groups";
 
 export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   const [models, setModels] = React.useState<ListedModel[]>([]);
@@ -30,8 +31,16 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
     () => [...models].sort((a, b) => a.model.localeCompare(b.model)),
     [models]
   );
-  // Searching only filters the list; details always resolve against all models.
-  const selectedModel = sortedModels.find(model => model.model === searchParams.get("model")) ?? sortedModels[0];
+  const sections = React.useMemo(() => getModelSections(sortedModels), [sortedModels]);
+  const groupNames = sections.map(section => section.group).filter(Boolean);
+  const requestedGroup = searchParams.get("group");
+  const currentGroup = sections.some(section => section.group === requestedGroup) ? requestedGroup : null;
+  const groupModels = currentGroup === null
+    ? (groupNames.length ? sections.flatMap(section => section.models) : sortedModels)
+    : sortedModels.filter(model => model.group === currentGroup);
+  // Search only filters the list; details resolve within the current group.
+  const explicitSelection = groupModels.find(model => model.model === searchParams.get("model"));
+  const selectedModel = explicitSelection ?? groupModels[0];
   const hasModelParam = searchParams.has("model");
   const listParams = new URLSearchParams(searchParams);
   listParams.delete("model");
@@ -127,6 +136,15 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
     updateRecordRequestsState.error || updateRecordResponsesState.error || deleteBackendState.error || reorderState.error;
   const addingBackendModel = models.find(model => model.model === addingBackendFor);
   const editingBackendModel = models.find(model => model.model === editingBackend?.model);
+  const selectSavedModel = (model: ModelConfig) => {
+    setSearchParams(params => {
+      const next = new URLSearchParams(params);
+      next.set("model", model.model);
+      if (currentGroup !== null && model.group !== currentGroup) next.set("group", model.group);
+      return next;
+    });
+    void load();
+  };
 
   return (
     <div className="min-w-0 space-y-4">
@@ -152,9 +170,10 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
           <aside className={`${hasModelParam ? "hidden lg:flex" : "flex"} w-full min-w-0 flex-col lg:sticky lg:top-4 lg:h-[calc(100dvh-2rem)] lg:w-72 lg:shrink-0`}>
             <ModelList
               models={sortedModels}
+              currentGroup={currentGroup}
               connections={connections}
               selectedModel={selectedModel.model}
-              selectedIsFallback={!hasModelParam}
+              selectedIsFallback={!explicitSelection}
               query={query}
               onQueryChange={setQuery}
               dialogOpen={dialogOpen}
@@ -186,22 +205,18 @@ export function BackendsPanel({ api }: { api: ReturnType<typeof useAdminApi> }) 
       <AddModelDialog
         open={addModelOpen}
         onOpenChange={setAddModelOpen}
-        onAdded={model => {
-          setSearchParams(params => {
-            const next = new URLSearchParams(params);
-            next.set("model", model);
-            return next;
-          });
-          void load();
-        }}
+        groupNames={groupNames}
+        initialGroup={currentGroup ?? ""}
+        onAdded={selectSavedModel}
       />
       <EditModelDialog
         open={editingModel !== null}
         model={editingModel}
+        groupNames={groupNames}
         onOpenChange={open => !open && setEditingModel(null)}
-        onSaved={() => {
+        onSaved={model => {
           setEditingModel(null);
-          void load();
+          selectSavedModel(model);
         }}
       />
       <AddBackendDialog

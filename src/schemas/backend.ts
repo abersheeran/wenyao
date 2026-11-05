@@ -62,6 +62,7 @@ export const backendConfigSchema = z.object({
 // Schema for creating a new model configuration
 export const createModelConfigSchema = z.object({
   model: z.string().min(1, 'Model name is required'),
+  group: z.string().trim().max(64).default(''),
   provider: providerTypeSchema,
   backends: z.array(backendConfigSchema).default([]), // Allow empty backends array
   loadBalancingStrategy: loadBalancingStrategySchema.default('weighted'),
@@ -71,6 +72,7 @@ export const createModelConfigSchema = z.object({
 // Schema for updating a model configuration - all fields are optional
 export const updateModelConfigSchema = z
   .object({
+    group: z.string().trim().max(64).optional(),
     backends: z
       .array(
         backendConfigSchema.extend({

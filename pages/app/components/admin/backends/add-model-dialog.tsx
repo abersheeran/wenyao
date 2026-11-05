@@ -9,10 +9,15 @@ import {
   DialogTitle,
 } from "../../ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import { useAdminApi, type LoadBalancingStrategy, type MinErrorRateOptions, type ProviderType } from "~/apis";
+import { useAdminApi, type ModelConfig, type LoadBalancingStrategy, type MinErrorRateOptions, type ProviderType } from "~/apis";
 
-export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (v: boolean) => void; onAdded: (model: string) => void; }) {
+export function AddModelDialog({ open, onOpenChange, onAdded, groupNames, initialGroup }: { open: boolean; onOpenChange: (v: boolean) => void; onAdded: (model: ModelConfig) => void; groupNames: string[]; initialGroup: string; }) {
   const api = useAdminApi();
+  const groupId = React.useId();
+  const [group, setGroup] = React.useState(initialGroup);
+  React.useEffect(() => {
+    if (open) setGroup(initialGroup);
+  }, [open, initialGroup]);
   const [form, setForm] = React.useState<{ model: string; provider: ProviderType; loadBalancingStrategy: LoadBalancingStrategy; enableAffinity?: boolean; minErrorRateOptions?: MinErrorRateOptions }>({
     model: "",
     provider: "openai",
@@ -30,13 +35,14 @@ export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean;
     e.preventDefault();
     const model = await api.addModel({
       ...form,
+      group: group.trim(),
       minErrorRateOptions: form.loadBalancingStrategy === 'min-error-rate' ? minErrorRateOpts : undefined
     });
     setForm({ model: "", provider: "openai", loadBalancingStrategy: "weighted", enableAffinity: false });
     setMinErrorRateOpts({ minRequests: 20, circuitBreakerThreshold: 0.9, epsilon: 0.001, timeWindowMinutes: 15 });
     onOpenChange(false);
-    onAdded(model.model);
-  }, [api, form, minErrorRateOpts, onOpenChange, onAdded]);
+    onAdded(model);
+  }, [api, form, group, minErrorRateOpts, onOpenChange, onAdded]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -54,6 +60,14 @@ export function AddModelDialog({ open, onOpenChange, onAdded }: { open: boolean;
               onChange={(e) => setForm({ ...form, model: e.target.value })}
               placeholder="e.g., gpt-4, claude-3-sonnet"
             />
+          </div>
+          <div>
+            <label htmlFor={groupId} className="block text-sm mb-1">Group</label>
+            <Input id={groupId} list={`${groupId}-options`} value={group} onChange={e => setGroup(e.target.value)} placeholder="e.g., production, test, develop" aria-describedby={`${groupId}-help`} />
+            <datalist id={`${groupId}-options`}>
+              {groupNames.map(name => <option key={name} value={name} />)}
+            </datalist>
+            <p id={`${groupId}-help`} className="text-xs text-gray-500 mt-1">用于在管理面板中区分环境（如 production、test、develop），不影响代理路由。留空表示未分组，最多 64 个字符。</p>
           </div>
           <div>
             <label className="block text-sm mb-1">Provider Type</label>

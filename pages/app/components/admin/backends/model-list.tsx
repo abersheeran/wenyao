@@ -7,9 +7,11 @@ import {
   getProviderDisplayName,
 } from "../../../config/provider-config";
 import Input from "../../ui/input";
+import { getModelSections } from "../model-groups";
 
 interface ModelListProps {
   models: ModelConfig[];
+  currentGroup: string | null;
   connections: Connection[];
   selectedModel: string;
   // The fallback selection is only shown beside the details pane on wide screens.
@@ -21,6 +23,7 @@ interface ModelListProps {
 
 export function ModelList({
   models,
+  currentGroup,
   connections,
   selectedModel,
   selectedIsFallback,
@@ -34,26 +37,34 @@ export function ModelList({
   const [highlightedIndex, setHighlightedIndex] = React.useState(0);
   const [searchFocused, setSearchFocused] = React.useState(false);
   const helpId = React.useId();
+  const sections = React.useMemo(() => getModelSections(models), [models]);
+  const hasGroups = models.some(model => model.group !== "");
+  const groupModels = currentGroup === null ? models : models.filter(model => model.group === currentGroup);
   const keyword = query.trim().toLowerCase();
   const connectionsById = React.useMemo(
     () => new Map(connections.map((connection) => [connection.id, connection])),
     [connections],
   );
   const visibleModels = React.useMemo(
-    () => models.filter((model) => !keyword
+    () => groupModels.filter((model) => !keyword
       || model.model.toLowerCase().includes(keyword)
+      || model.group.toLowerCase().includes(keyword)
       || model.backends.some((backend) => {
         const connection = connectionsById.get(backend.connectionId);
         return backend.id.toLowerCase().includes(keyword)
           || backend.connectionId?.toLowerCase().includes(keyword)
           || connection?.name?.toLowerCase().includes(keyword);
       })),
-    [models, connectionsById, keyword],
+    [groupModels, connectionsById, keyword],
   );
+  const visibleSections = hasGroups && currentGroup === null
+    ? getModelSections(visibleModels)
+    : [{ group: "", models: visibleModels }];
+  const displayedModels = visibleSections.flatMap(section => section.models);
 
   React.useEffect(() => {
     setHighlightedIndex(0);
-  }, [query]);
+  }, [query, currentGroup]);
 
   React.useEffect(() => {
     setHighlightedIndex((index) => Math.min(index, Math.max(visibleModels.length - 1, 0)));
@@ -83,20 +94,20 @@ export function ModelList({
 
   const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey
-      || visibleModels.length === 0) {
+      || displayedModels.length === 0) {
       return;
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const nextIndex = Math.max(0, Math.min(
-        visibleModels.length - 1,
+        displayedModels.length - 1,
         highlightedIndex + (event.key === "ArrowDown" ? 1 : -1),
       ));
       setHighlightedIndex(nextIndex);
-      itemRefs.current.get(visibleModels[nextIndex].model)?.scrollIntoView({ block: "nearest" });
+      itemRefs.current.get(displayedModels[nextIndex].model)?.scrollIntoView({ block: "nearest" });
     } else if (event.key === "Enter") {
       event.preventDefault();
-      const model = visibleModels[highlightedIndex] ?? visibleModels[0];
+      const model = displayedModels[highlightedIndex] ?? displayedModels[0];
       setSearchParams((previous) => {
         const next = new URLSearchParams(previous);
         next.set("model", model.model);
@@ -108,12 +119,33 @@ export function ModelList({
   return (
     <nav aria-label="Models" className="flex h-full min-h-0 flex-col rounded-lg border bg-white">
       <div className="shrink-0 space-y-2 border-b p-3">
+        {hasGroups && (
+          <div role="group" aria-label="Model groups" className="flex max-h-48 flex-wrap gap-1 overflow-y-auto">
+            {[{ group: null, count: models.length }, ...sections.map(section => ({ group: section.group, count: section.models.length }))].map(option => {
+              const next = new URLSearchParams(searchParams);
+              if (option.group === null) next.delete("group");
+              else next.set("group", option.group);
+              const selected = models.find(model => model.model === searchParams.get("model"));
+              if (!selected || (option.group !== null && selected.group !== option.group)) next.delete("model");
+              return (
+                <Link
+                  key={option.group === null ? "all" : `group:${option.group}`}
+                  to={{ search: next.size ? `?${next}` : "" }}
+                  aria-current={currentGroup === option.group ? "true" : undefined}
+                  className={`min-w-0 break-all rounded border px-2 py-1 text-xs ${currentGroup === option.group ? "border-blue-200 bg-blue-50 text-blue-950" : "border-transparent text-gray-600 hover:bg-gray-50"}`}
+                >
+                  {option.group === null ? "All" : option.group || "Ungrouped"} ({option.count})
+                </Link>
+              );
+            })}
+          </div>
+        )}
         <div className="relative">
           <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
           <Input
             ref={searchRef}
             type="search"
-            aria-label="Search models, backend IDs, or connections"
+            aria-label="Search models, groups, backend IDs, or connections"
             aria-describedby={helpId}
             placeholder="Search models, backends..."
             value={query}
@@ -125,7 +157,7 @@ export function ModelList({
           />
         </div>
         <p className="text-xs text-gray-500" aria-live="polite">
-          {visibleModels.length} / {models.length} models
+          {visibleModels.length} / {groupModels.length} models
         </p>
         <p id={helpId} className="text-xs text-gray-500">↑ ↓ 高亮 · Enter 选中 · / 搜索</p>
       </div>
@@ -133,57 +165,66 @@ export function ModelList({
         {visibleModels.length === 0 ? (
           <p className="px-2 py-4 text-sm text-gray-500">No models match "{query.trim()}".</p>
         ) : (
-          <ul className="space-y-1">
-            {visibleModels.map((model, index) => {
-              const enabledCount = model.backends.filter((backend) => backend.enabled && backend.weight > 0).length;
-              const warnings: string[] = [];
-              if (enabledCount === 0) warnings.push("No available backend (enabled with weight > 0).");
-              if (model.backends.some((backend) => !backend.connectionId)) {
-                warnings.push("A backend has no connection configured.");
-              }
-              if (model.backends.some((backend) => backend.connectionId && !connectionsById.has(backend.connectionId))) {
-                warnings.push("A backend references a connection that does not exist.");
-              }
-              const nextParams = new URLSearchParams(searchParams);
-              nextParams.set("model", model.model);
-              const selected = model.model === selectedModel;
+          <div className="space-y-3">
+            {visibleSections.map(section => (
+              <section key={section.group}>
+                {hasGroups && currentGroup === null && (
+                  <h3 className="break-all px-3 py-2 text-xs font-semibold text-gray-500">{section.group || "Ungrouped"} ({section.models.length})</h3>
+                )}
+                <ul className="space-y-1">
+                  {section.models.map((model) => {
+                    const enabledCount = model.backends.filter((backend) => backend.enabled && backend.weight > 0).length;
+                    const warnings: string[] = [];
+                    if (enabledCount === 0) warnings.push("No available backend (enabled with weight > 0).");
+                    if (model.backends.some((backend) => !backend.connectionId)) {
+                      warnings.push("A backend has no connection configured.");
+                    }
+                    if (model.backends.some((backend) => backend.connectionId && !connectionsById.has(backend.connectionId))) {
+                      warnings.push("A backend references a connection that does not exist.");
+                    }
+                    const nextParams = new URLSearchParams(searchParams);
+                    nextParams.set("model", model.model);
+                    const selected = model.model === selectedModel;
 
-              return (
-                <li key={model.model}>
-                  <Link
-                    ref={(element) => {
-                      if (element) itemRefs.current.set(model.model, element);
-                      else itemRefs.current.delete(model.model);
-                    }}
-                    to={`?${nextParams.toString()}`}
-                    aria-current={selected ? "page" : undefined}
-                    className={`block rounded-md border px-3 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 ${!selected ? "border-transparent hover:bg-gray-50" : selectedIsFallback ? "border-transparent hover:bg-gray-50 lg:border-blue-200 lg:bg-blue-50 lg:text-blue-950" : "border-blue-200 bg-blue-50 text-blue-950"} ${searchFocused && index === highlightedIndex ? "ring-1 ring-inset ring-gray-400" : ""}`}
-                  >
-                    <div className="flex items-start gap-2">
-                      <span className="min-w-0 flex-1 break-all text-sm font-medium">{model.model}</span>
-                      {warnings.length > 0 && (
-                        <TriangleAlert
-                          role="img"
-                          aria-label={warnings.join(" ")}
-                          className="mt-0.5 h-4 w-4 shrink-0 text-amber-600"
+                    return (
+                      <li key={model.model}>
+                        <Link
+                          ref={(element) => {
+                            if (element) itemRefs.current.set(model.model, element);
+                            else itemRefs.current.delete(model.model);
+                          }}
+                          to={`?${nextParams.toString()}`}
+                          aria-current={selected ? "page" : undefined}
+                          className={`block rounded-md border px-3 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/30 ${!selected ? "border-transparent hover:bg-gray-50" : selectedIsFallback ? "border-transparent hover:bg-gray-50 lg:border-blue-200 lg:bg-blue-50 lg:text-blue-950" : "border-blue-200 bg-blue-50 text-blue-950"} ${searchFocused && displayedModels[highlightedIndex]?.model === model.model ? "ring-1 ring-inset ring-gray-400" : ""}`}
                         >
-                          <title>{warnings.join(" ")}</title>
-                        </TriangleAlert>
-                      )}
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                      <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${getProviderBadgeClass(model.provider)}`}>
-                        {getProviderDisplayName(model.provider)}
-                      </span>
-                      <span className="text-xs text-gray-500" title="Enabled backends / All backends">
-                        {enabledCount} / {model.backends.length} 已启用
-                      </span>
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+                          <div className="flex items-start gap-2">
+                            <span className="min-w-0 flex-1 break-all text-sm font-medium">{model.model}</span>
+                            {warnings.length > 0 && (
+                              <TriangleAlert
+                                role="img"
+                                aria-label={warnings.join(" ")}
+                                className="mt-0.5 h-4 w-4 shrink-0 text-amber-600"
+                              >
+                                <title>{warnings.join(" ")}</title>
+                              </TriangleAlert>
+                            )}
+                          </div>
+                          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                            <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${getProviderBadgeClass(model.provider)}`}>
+                              {getProviderDisplayName(model.provider)}
+                            </span>
+                            <span className="text-xs text-gray-500" title="Enabled backends / All backends">
+                              {enabledCount} / {model.backends.length} 已启用
+                            </span>
+                          </div>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
+          </div>
         )}
       </div>
     </nav>

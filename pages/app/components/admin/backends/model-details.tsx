@@ -101,6 +101,7 @@ export function ModelDetails({
       <div className="flex flex-wrap items-start justify-between gap-4 rounded-t-lg border-b bg-gray-50/80 p-4">
         <div className="min-w-0 space-y-3">
           <h3 className="break-all text-lg font-medium">{model.model}</h3>
+          {model.group && <p className="break-all text-sm text-gray-600">分组: {model.group}</p>}
           <div className="flex flex-wrap items-center gap-2">
             <span className={`whitespace-nowrap rounded px-2 py-1 text-xs font-medium ${getProviderBadgeClass(model.provider)}`}>
               {getProviderDisplayName(model.provider)}

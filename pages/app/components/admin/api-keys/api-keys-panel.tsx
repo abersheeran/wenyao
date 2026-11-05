@@ -9,13 +9,13 @@ import {
   TableRow,
   TableCell,
 } from "../../ui/table";
-import { useAdminApi, type ApiKey } from "~/apis";
+import { useAdminApi, type ApiKey, type ModelConfig } from "~/apis";
 import { AddApiKeyDialog } from "./add-api-key-dialog";
 import { EditApiKeyDialog } from "./edit-api-key-dialog";
 
 export function ApiKeysPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
   const [apiKeys, setApiKeys] = React.useState<ApiKey[]>([]);
-  const [models, setModels] = React.useState<string[]>([]);
+  const [models, setModels] = React.useState<ModelConfig[]>([]);
   const [addApiKeyOpen, setAddApiKeyOpen] = React.useState(false);
   const [editingApiKey, setEditingApiKey] = React.useState<ApiKey | null>(null);
 
@@ -26,7 +26,7 @@ export function ApiKeysPanel({ api }: { api: ReturnType<typeof useAdminApi> }) {
         api.listModels()
       ]);
       setApiKeys(keysData);
-      setModels(modelsData.map(m => m.model));
+      setModels(modelsData);
       return keysData;
     } catch (error: any) {
       if (error?.message?.includes('Unauthorized') || error?.message?.includes('401')) {

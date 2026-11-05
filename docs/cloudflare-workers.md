@@ -102,7 +102,7 @@ CREATE INDEX idx_recorded_model ON recorded_requests (model, timestamp);
 CREATE INDEX idx_recorded_timestamp ON recorded_requests (timestamp);
 ```
 
-`models.config` 保持原 `ModelConfig` 文档形状，只有一处不同：backend 用 `connectionId` 引用 `connections` 中的连接，不再内嵌 `openaiConfig` / `bedrockConfig`（见 5.8）。`connections` 表由 `migrations/0002_connections.sql` 创建，`name` 列由 `migrations/0003_connection_names.sql` 添加。
+`models.config` 保持原 `ModelConfig` 文档形状，只有一处不同：backend 用 `connectionId` 引用 `connections` 中的连接，不再内嵌 `openaiConfig` / `bedrockConfig`（见 5.8）。模型分组 `group` 也保存在这份 JSON 中（见 5.11），不需要单独的列或迁移。`connections` 表由 `migrations/0002_connections.sql` 创建，`name` 列由 `migrations/0003_connection_names.sql` 添加。
 
 `recorded_requests` 还包含响应录制的列，直接写在 `migrations/0001_init.sql` 的建表语句中：
 
@@ -291,7 +291,8 @@ CREATE TABLE slots (
 模型和 backend 多了以后，要能快速找到某个模型，并在它和其他模型之间切换。`/` 页采用左右两栏布局：左栏是模型列表，右栏是选中模型的详情。
 
 - **左栏：模型列表**
-  - 按模型名排序，顶部有搜索框。搜索不区分大小写，匹配模型名、backend ID，以及 backend 所用 connection 的名称或 id。
+  - 按模型名排序，顶部有搜索框。搜索不区分大小写，匹配模型名、分组名、backend ID，以及 backend 所用 connection 的名称或 id。
+  - 设置了分组时，列表支持按分组筛选和分节显示（见 5.11）。
   - 每项显示模型名、provider，以及「已启用 / 全部」的 backend 数量。已启用指 `enabled` 且 `weight > 0`，与负载均衡的判定一致。
   - 以下情况在该项上显示警告标记，悬停说明原因：
     - 没有可用的 backend；
@@ -312,8 +313,8 @@ CREATE TABLE slots (
     - 流式响应开始返回后再中断，不会回退。全部失败时，返回最后一次尝试的错误。
 - **选中状态**
   - 保存在 URL 查询参数 `?model=` 中，刷新或分享链接后保持；切换模型会产生浏览历史，可以用后退回到上一个模型。
-  - 未指定或模型不存在时，桌面宽度下显示列表中的第一个模型。
-  - 新增模型后选中它；删除当前模型后清除选中。
+  - 未指定、模型不存在或不属于当前分组筛选时，桌面宽度下显示当前分组筛选下按显示顺序的第一个模型。
+  - 新增模型后选中它，编辑模型后保持选中它（见 5.11）；删除当前模型后清除选中。
   - 在 backend 上切换开关、调整顺序或编辑、删除后，选中状态和搜索词保持不变。
 - **窄屏**：未选中模型时只显示列表；选中后只显示详情，顶部有返回列表的链接。
 
@@ -349,6 +350,32 @@ Jev 是 TypeSafe 的决策模型，官方接口是 TypeSafe 的 System One API�
   - 文鳐自己产生的错误（鉴权、权限、模型不存在、并发已满等）与其他代理接口格式相同，状态码与官方的含义一致。官方 SDK 按状态码区分错误，不依赖错误体的格式。
 - **录制与重放**：录制的是转发给上游的 JSON（图片已内嵌为 base64），`url` 是上游的 `v1/systemone` 地址。重放时把目标地址设为文鳐的 `/v1/systemone`。
 
+### 5.11 模型分组
+
+production、test、develop 等不同环境的模型都在同一个列表里，模型多了以后容易看错、改错，或者把其他环境的模型授权给代理 key。模型可以设置分组，在管理面板中按环境区分。
+
+- **字段**：分组名是 `ModelConfig.group`，保存在 `models.config` JSON 中。
+  - 可选，可以随时修改。首尾空白会被去掉，最长 64 个字符；空字符串表示未分组。没有 `group` 的已有模型视为未分组。
+  - 分组名是自由文本，区分大小写，没有预设值，可以是 `production`、`test`、`develop` 或其他名称。分组不需要单独创建：所有模型的 `group` 值就是全部分组，最后一个模型移出某个分组后，该分组自然消失。
+  - 分组只用于管理面板，不参与代理路由、负载均衡、鉴权、指标和录制。模型名仍然全局唯一，不同分组不能有同名模型。代理 API key 仍按模型名授权。
+- **管理 API**：
+  - `POST /admin/models` 接受可选的 `group`，缺省为空字符串。
+  - `PUT /admin/models/:model` 接受 `group`，可以只修改分组，传空字符串清除分组。
+  - 分组名超过 64 个字符时返回 400。
+  - 所有返回模型的接口（模型的读取和写入，以及 backend 写入返回的 `model`）都包含 `group`，未分组时为空字符串，与 connection 的 `name` 一致。
+- **`/` 页左栏**：
+  - 分组筛选：
+    - 至少一个模型设置了分组时，搜索框上方显示筛选项：「全部」、每个分组（按名称排序），以及「未分组」（仅当存在未分组模型时显示）。每项显示模型数量。
+    - 所有模型都未分组时不显示筛选，列表与原来相同。
+    - 筛选保存在 URL 查询参数 `?group=` 中，刷新或分享链接后保持；不带参数表示「全部」，`?group=`（空值）表示「未分组」；不存在的分组按「全部」处理。
+  - 分节：「全部」视图下按分组分节显示，分组按名称排序，未分组排在最后，每节标题显示分组名和数量；节内仍按模型名排序。上下方向键按显示顺序移动高亮。
+  - 搜索只在当前分组内进行，模型计数也按当前分组统计。
+  - 切换分组时，如果当前选中的模型属于新分组就保持选中，否则清除 `?model=`。
+  - 新增或编辑模型后选中该模型。如果它不在当前筛选的分组中，筛选切换到它所在的分组。
+- **模型表单**：添加和编辑模型时可以填写分组，输入框提示已有的分组名，避免拼写不一致。在某个分组的筛选下添加模型时，预填该分组。
+- **模型详情**：设置了分组时，标题下方显示分组名。
+- **API key 对话框**：添加和编辑代理 API key 时，至少一个模型设置了分组时，可选模型按分组分节显示，规则与左栏相同；否则与原来相同。
+
 ## 6. 接口变化
 
 保留的接口及其路径、请求格式、响应形状不变：
@@ -383,6 +410,7 @@ Jev 是 TypeSafe 的决策模型，官方接口是 TypeSafe 的 System One API�
   - 请求体为 `{ backendIds }`，按新顺序列出该模型当前的全部 backend ID，每个恰好一次。返回 `{ model }`，与其他 backend 写入接口相同。
   - 列表为空或有重复 ID 时返回 400；模型不存在时返回 404；与模型当前的 backend 不一致时（缺少、多出或未知 ID，例如期间有人增删了 backend）返回 409。
   - 只改变顺序，不修改 backend 的其他字段，也不重新校验 connection，因此未设置 connection 的遗留 backend 不会阻塞排序。与其他模型写入一样使用比较并交换，写入后失效当前 isolate 的配置缓存。
+- 模型新增 `group` 字段（见 5.11）：创建和更新模型时可选，模型响应总是包含该字段，未分组时为空字符串。
 - 新增 `/admin/connections` 的 CRUD（见 5.8）。**不兼容变更**：创建和更新 backend（包括通过模型的 `backends` 数组写入）时，用 `connectionId` 代替 `openaiConfig` / `bedrockConfig`。缺少 `connectionId` 的创建请求返回 400。模型和 backend 的响应不再包含凭据。
 
 ## 7. 部署

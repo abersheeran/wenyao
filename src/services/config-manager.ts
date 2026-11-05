@@ -78,6 +78,7 @@ function parseModelConfig(config: string): ModelConfig {
   const model = JSON.parse(config) as ResolvedModelConfig
   return {
     ...model,
+    group: typeof model.group === 'string' ? model.group : '',
     backends: model.backends.map(
       ({ openaiConfig: _openai, bedrockConfig: _bedrock, jevConfig: _jev, ...backend }) => backend
     ),

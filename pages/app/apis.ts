@@ -46,6 +46,7 @@ export type MinErrorRateOptions = {
 
 export type ModelConfig = {
   model: string;
+  group: string;
   provider: ProviderType;
   backends: BackendConfig[];
   loadBalancingStrategy: LoadBalancingStrategy;
@@ -232,7 +233,7 @@ export function useAdminApi() {
       const data = await res.json();
       return data.model;
     },
-    async addModel(payload: Omit<ModelConfig, 'backends'> & { backends?: BackendConfig[] }): Promise<ModelConfig> {
+    async addModel(payload: Omit<ModelConfig, 'backends' | 'group'> & { backends?: BackendConfig[]; group?: string }): Promise<ModelConfig> {
       const res = await fetch(`${base}/models`, {
         method: "POST",
         headers: createAuthHeaders({ "Content-Type": "application/json" }),
@@ -245,7 +246,7 @@ export function useAdminApi() {
       const data = await res.json();
       return data.model;
     },
-    async updateModel(model: string, updates: { loadBalancingStrategy?: LoadBalancingStrategy; backends?: BackendConfig[]; minErrorRateOptions?: MinErrorRateOptions; enableAffinity?: boolean }): Promise<ModelConfig> {
+    async updateModel(model: string, updates: { group?: string; loadBalancingStrategy?: LoadBalancingStrategy; backends?: BackendConfig[]; minErrorRateOptions?: MinErrorRateOptions; enableAffinity?: boolean }): Promise<ModelConfig> {
       const res = await fetch(`${base}/models/${encodeURIComponent(model)}`, {
         method: "PUT",
         headers: createAuthHeaders({ "Content-Type": "application/json" }),

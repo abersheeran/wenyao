@@ -66,6 +66,7 @@ export interface AffinityMapping {
 // Model configuration - primary structure with model as unique key
 export interface ModelConfig {
   model: string // Primary key - the model name (e.g., "gpt-4", "claude-3-sonnet")
+  group: string // Admin-only label; empty means ungrouped.
   provider: ProviderType // Provider type for this model - all backends must use this provider
   backends: BackendConfig[] // Array of backend configurations for this model
   loadBalancingStrategy: LoadBalancingStrategy // Strategy for selecting backends

@@ -8,7 +8,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../ui/dialog";
-import { useAdminApi, type ApiKey } from "~/apis";
+import { getModelSections } from "../model-groups";
+import { useAdminApi, type ApiKey, type ModelConfig } from "~/apis";
 
 export function EditApiKeyDialog({
   open,
@@ -20,10 +21,12 @@ export function EditApiKeyDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
   apiKey: ApiKey | null;
-  availableModels: string[];
+  availableModels: ModelConfig[];
   onSaved: () => void;
 }) {
   const api = useAdminApi();
+  const hasGroups = availableModels.some(model => model.group !== "");
+  const sections = hasGroups ? getModelSections(availableModels) : [{ group: "", models: availableModels }];
   const [form, setForm] = React.useState<{ description: string; models: string[] }>({
     description: "",
     models: []
@@ -56,7 +59,7 @@ export function EditApiKeyDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit API Key</DialogTitle>
         </DialogHeader>
@@ -80,19 +83,27 @@ export function EditApiKeyDialog({
             {availableModels.length === 0 ? (
               <p className="text-sm text-gray-500">No models available.</p>
             ) : (
-              <div className="flex flex-wrap gap-2">
-                {availableModels.map((model) => (
-                  <button
-                    key={model}
-                    type="button"
-                    onClick={() => toggleModel(model)}
-                    className={`px-3 py-1.5 rounded border text-sm transition-colors ${form.models.includes(model)
-                        ? 'bg-blue-100 border-blue-300 text-blue-800'
-                        : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
-                      }`}
-                  >
-                    {model}
-                  </button>
+              <div className="space-y-3">
+                {sections.map(section => (
+                  <section key={section.group}>
+                    {hasGroups && <h4 className="break-all mb-2 text-xs font-semibold text-gray-500">{section.group || "Ungrouped"} ({section.models.length})</h4>}
+                    <div className="flex flex-wrap gap-2">
+                      {section.models.map(({ model }) => (
+                        <button
+                          key={model}
+                          type="button"
+                          aria-pressed={form.models.includes(model)}
+                          onClick={() => toggleModel(model)}
+                          className={`max-w-full break-all px-3 py-1.5 rounded border text-sm transition-colors ${form.models.includes(model)
+                              ? 'bg-blue-100 border-blue-300 text-blue-800'
+                              : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
+                            }`}
+                        >
+                          {model}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
                 ))}
               </div>
             )}

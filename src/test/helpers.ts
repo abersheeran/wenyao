@@ -46,6 +46,7 @@ export function createTestBedrockBackend(overrides: Partial<BackendConfig> = {})
 export function modelConfig(overrides: Partial<ModelConfig> = {}): ModelConfig {
   return {
     model: MODEL,
+    group: '',
     provider: 'openai',
     loadBalancingStrategy: 'weighted',
     backends: [createTestOpenAIBackend()],

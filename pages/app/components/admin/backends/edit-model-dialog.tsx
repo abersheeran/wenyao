@@ -11,13 +11,16 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { useAdminApi, type ModelConfig, type LoadBalancingStrategy, type MinErrorRateOptions } from "~/apis";
 
-export function EditModelDialog({ open, onOpenChange, model, onSaved }: {
+export function EditModelDialog({ open, onOpenChange, model, onSaved, groupNames }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   model: ModelConfig | null;
-  onSaved: () => void;
+  onSaved: (model: ModelConfig) => void;
+  groupNames: string[];
 }) {
   const api = useAdminApi();
+  const groupId = React.useId();
+  const [group, setGroup] = React.useState("");
   const [strategy, setStrategy] = React.useState<LoadBalancingStrategy>("weighted");
   const [enableAffinity, setEnableAffinity] = React.useState<boolean>(false);
   const [minErrorRateOpts, setMinErrorRateOpts] = React.useState<MinErrorRateOptions>({
@@ -29,6 +32,7 @@ export function EditModelDialog({ open, onOpenChange, model, onSaved }: {
 
   React.useEffect(() => {
     if (model) {
+      setGroup(model.group);
       setStrategy(model.loadBalancingStrategy);
       setEnableAffinity(model.enableAffinity || false);
       // Load existing options or use defaults
@@ -44,13 +48,14 @@ export function EditModelDialog({ open, onOpenChange, model, onSaved }: {
   const [submitState, submit] = useAsyncFn(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!model) return;
-    await api.updateModel(model.model, {
+    const updated = await api.updateModel(model.model, {
+      group: group.trim(),
       loadBalancingStrategy: strategy,
       enableAffinity: enableAffinity,
       minErrorRateOptions: strategy === 'min-error-rate' ? minErrorRateOpts : undefined
     });
-    onSaved();
-  }, [api, model, strategy, enableAffinity, minErrorRateOpts, onSaved]);
+    onSaved(updated);
+  }, [api, model, group, strategy, enableAffinity, minErrorRateOpts, onSaved]);
 
   if (!model) return null;
 
@@ -66,6 +71,14 @@ export function EditModelDialog({ open, onOpenChange, model, onSaved }: {
             <label className="block text-sm mb-1">Model Name</label>
             <Input value={model.model} disabled readOnly />
             <p className="text-xs text-gray-500 mt-1">Model name cannot be changed</p>
+          </div>
+          <div>
+            <label htmlFor={groupId} className="block text-sm mb-1">Group</label>
+            <Input id={groupId} list={`${groupId}-options`} value={group} onChange={e => setGroup(e.target.value)} placeholder="e.g., production, test, develop" aria-describedby={`${groupId}-help`} />
+            <datalist id={`${groupId}-options`}>
+              {groupNames.map(name => <option key={name} value={name} />)}
+            </datalist>
+            <p id={`${groupId}-help`} className="text-xs text-gray-500 mt-1">用于在管理面板中区分环境（如 production、test、develop），不影响代理路由。留空表示未分组，最多 64 个字符。</p>
           </div>
           <div>
             <label className="block text-sm mb-1">Load Balancing Strategy</label>
