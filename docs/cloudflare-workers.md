@@ -402,6 +402,9 @@ production、test、develop 等不同环境的模型都在同一个列表里，�
 - 配置和 API Key 的变更在代理路径上最多 10 秒后生效，原来是实时生效。
 - `ADMIN_APIKEYS` 未配置时，管理 API 拒绝所有请求。
 - 管理接口的业务错误返回 JSON `{ error }` 和对应状态码：不存在返回 404，已存在返回 409，provider 不匹配返回 400。原来这些情况都是 500 纯文本。
+- 管理接口的请求校验错误也返回 400 和字符串 `error`，管理面板可以直接显示：
+  - 路径参数、查询参数或请求体校验失败时，按 `字段路径: 原因` 列出每个问题，多条用 `; ` 分隔，例如 `minErrorRateOptions.epsilon: Too small: expected number to be >0`；整体规则（例如更新时至少提供一个字段）不带路径前缀。原来返回 `{ success: false, error: { name, message } }`，面板只能显示 `[object Object]`。
+  - 请求体不是合法 JSON 时返回 400，原来返回 500。
 - `GET /admin/affinity/:model/:sessionId` 变为纯读取，不再修改访问计数。
 - `/admin/active-requests` 和 Prometheus 的 `llm_proxy_active_requests` 只包含配置了并发限制的后端，计数来自各 backend DO 的 `count()` RPC。未配置限制的后端不再统计活跃请求。
 - 后端配置新增 `recordResponses`。`/admin/recorded-requests` 的每条记录新增 `response` 字段（见 5.5），原有字段不变。

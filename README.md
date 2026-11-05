@@ -146,5 +146,5 @@ ADMIN_API_KEY='<管理key>' PROXY_API_KEY='<代理key>' \
 - 非流式 2xx 响应会校验 JSON，非法 JSON 按失败计数并尝试下一个后端；合法 JSON 原始字节透传。
 - Cron 每 5 分钟清理过期的亲和映射和分钟指标。录制数据不会自动过期，删除录制时同时删除 D1 元数据及 R2 中的请求体、响应体。
 - 不再提供 `/admin/instances` 或 `/admin/instances/:instanceId/stats`，历史指标不再包含 `instanceId` 参数或字段；`/health` 不再返回 `instanceId`、`metricsEnabled`。
-- 管理业务错误统一为 JSON `{ "error": "..." }`：不存在为 404，已存在为 409，provider 不匹配为 400。指标接口变化见上述条目；其余保留接口的路径和响应形状不变，录制数据仍返回 `_id` 和 `body`。
+- 管理业务错误统一为 JSON `{ "error": "..." }`：不存在为 404，已存在为 409，provider 不匹配为 400。请求参数校验失败或请求体不是合法 JSON 时同样返回 400 和字符串 `error`；校验错误按 `字段路径: 原因` 列出，多条用 `; ` 分隔，例如 `minErrorRateOptions.epsilon: Too small: expected number to be >0`。指标接口变化见上述条目；其余保留接口的路径和响应形状不变，录制数据仍返回 `_id` 和 `body`。
 - 运行配置只使用 Workers bindings 和 `ADMIN_APIKEYS`。原来的数据库连接、指标开关、实例 ID、端口等环境变量已删除。

@@ -198,6 +198,39 @@ describe('Management CRUD persists to D1', () => {
     await expectError(await admin('/apikeys/missing', 'DELETE'), 404)
   })
 
+  it('reports validation failures and malformed JSON as a JSON error string', async () => {
+    const expectMessage = async (response: Response, parts: string[]) => {
+      expect(response.status).toBe(400)
+      const body = (await response.json()) as Record<string, unknown>
+      expect(Object.keys(body)).toEqual(['error'])
+      expect(typeof body.error).toBe('string')
+      for (const part of parts) expect(body.error).toContain(part)
+    }
+    // Nested paths are dotted and every issue is reported.
+    await expectMessage(
+      await admin('/models', 'POST', {
+        ...modelConfig({ backends: [] }),
+        provider: 'unknown',
+        minErrorRateOptions: { epsilon: 0 },
+      }),
+      ['provider: ', '; ', 'minErrorRateOptions.epsilon: ']
+    )
+    await seed()
+    // Root-level refinements carry no path prefix.
+    const empty = await admin(`/models/${MODEL}`, 'PUT', {})
+    expect(empty.status).toBe(400)
+    expect(await empty.json()).toEqual({ error: 'At least one field must be provided for update' })
+    await expectMessage(await admin('/stats/history?intervalMinutes=0'), ['intervalMinutes: '])
+    await expectMessage(
+      await request('/admin/models', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ADMIN_KEY}`, 'Content-Type': 'application/json' },
+        body: '{bad',
+      }),
+      ['Malformed JSON']
+    )
+  })
+
   it('invalidates current isolate model and key caches after writes', async () => {
     await seed()
     upstream(() => jsonResponse({ ok: true }))

@@ -1,5 +1,6 @@
-import { zValidator } from '@hono/zod-validator'
+import { zValidator as baseZValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
+import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 
 import { adminAuth } from '../middleware/auth.js'
@@ -29,11 +30,31 @@ import { RequestRecorder } from '../services/request-recorder.js'
 
 import type { ModelConfig, StatsDataPoint } from '../types/backend.js'
 import type { HonoEnv } from '../types/context.js'
+import type { ValidationTargets } from 'hono'
+
+// Validation failures use the same `{ error: string }` shape as business errors, e.g.
+// "minErrorRateOptions.epsilon: Too small: expected number to be >0".
+function zValidator<T extends z.ZodType, Target extends keyof ValidationTargets>(
+  target: Target,
+  schema: T
+) {
+  return baseZValidator(target, schema, (result, c) => {
+    if (result.success) return
+    const error = result.error.issues
+      .map(({ path, message }) =>
+        path.length ? `${path.map(String).join('.')}: ${message}` : message
+      )
+      .join('; ')
+    return c.json({ error }, 400)
+  })
+}
 
 const admin = new Hono<HonoEnv>()
 admin.use('*', adminAuth)
 admin.onError((error, c) => {
   if (error instanceof BusinessError) return c.json({ error: error.message }, error.status)
+  // Raised by Hono's validator, e.g. a malformed JSON body.
+  if (error instanceof HTTPException) return c.json({ error: error.message }, error.status)
   console.error('Admin request failed:', error)
   return c.json({ error: 'Internal server error' }, 500)
 })
